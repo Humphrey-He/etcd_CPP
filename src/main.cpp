@@ -1,33 +1,75 @@
 ﻿#include "etcdmvp/grpc_server.h"
-#include "etcdmvp/cluster/cluster.h"
+#include "etcdmvp/node.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
+#include <sstream>
+#include <string>
 #include <thread>
-#include <vector>
+#include <unordered_map>
 
 using namespace etcdmvp;
 
-int main() {
-  MvpCluster cluster(3);
-  cluster.Start();
+namespace {
+std::unordered_map<int64_t, std::string> ParsePeers(const std::string& peers) {
+  std::unordered_map<int64_t, std::string> map;
+  std::stringstream ss(peers);
+  std::string item;
+  while (std::getline(ss, item, ',')) {
+    auto pos = item.find('=');
+    if (pos == std::string::npos) continue;
+    int64_t id = std::stoll(item.substr(0, pos));
+    std::string addr = item.substr(pos + 1);
+    map[id] = addr;
+  }
+  return map;
+}
+}
 
-  std::unordered_map<int64_t, std::string> addresses;
-  addresses[1] = "0.0.0.0:2379";
-  addresses[2] = "0.0.0.0:2380";
-  addresses[3] = "0.0.0.0:2381";
+int main(int argc, char** argv) {
+  int64_t node_id = 1;
+  std::string listen = "0.0.0.0:2379";
+  std::string peers_env;
 
-  std::vector<std::thread> threads;
-  std::vector<std::unique_ptr<GrpcServer>> servers;
-  servers.push_back(std::make_unique<GrpcServer>(1, addresses[1], &cluster, addresses));
-  servers.push_back(std::make_unique<GrpcServer>(2, addresses[2], &cluster, addresses));
-  servers.push_back(std::make_unique<GrpcServer>(3, addresses[3], &cluster, addresses));
-
-  for (size_t i = 0; i < servers.size(); ++i) {
-    threads.emplace_back([&servers, i]() { servers[i]->Start(); });
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--id" && i + 1 < argc) {
+      node_id = std::stoll(argv[++i]);
+    } else if (arg == "--listen" && i + 1 < argc) {
+      listen = argv[++i];
+    } else if (arg == "--peers" && i + 1 < argc) {
+      peers_env = argv[++i];
+    }
   }
 
-  std::cout << "etcd MVP gRPC servers started on 2379/2380/2381." << std::endl;
+  if (peers_env.empty()) {
+    const char* env = std::getenv("ETCD_MVP_PEERS");
+    if (env) peers_env = env;
+  }
+
+  if (const char* env = std::getenv("ETCD_MVP_NODE_ID")) {
+    node_id = std::stoll(env);
+  }
+
+  if (const char* env = std::getenv("ETCD_MVP_LISTEN")) {
+    listen = env;
+  }
+
+  auto peers = ParsePeers(peers_env);
+  if (peers.empty()) {
+    peers[1] = "127.0.0.1:2379";
+    peers[2] = "127.0.0.1:2380";
+    peers[3] = "127.0.0.1:2381";
+  }
+
+  EtcdNode node(node_id, peers);
+  node.Start();
+
+  GrpcServer server(node_id, listen, &node, peers);
+  std::thread t([&server]() { server.Start(); });
+
+  std::cout << "Node " << node_id << " listening on " << listen << std::endl;
   std::cout << "Type 'exit' to stop." << std::endl;
 
   std::string line;
@@ -35,11 +77,8 @@ int main() {
     if (line == "exit" || line == "quit") break;
   }
 
-  for (auto& s : servers) s->Stop();
-  cluster.Stop();
-
-  for (auto& t : threads) {
-    if (t.joinable()) t.join();
-  }
+  server.Stop();
+  node.Stop();
+  if (t.joinable()) t.join();
   return 0;
 }

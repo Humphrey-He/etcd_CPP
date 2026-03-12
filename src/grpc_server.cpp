@@ -1,11 +1,11 @@
 ﻿#include "etcdmvp/grpc_server.h"
 
-#include "etcdmvp/cluster/cluster.h"
 #include "etcdmvp/kv/kv_engine.h"
 #include "etcdmvp/watch/watch_manager.h"
 
 #include "etcd_mvp.grpc.pb.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -14,6 +14,7 @@
 #include <queue>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 namespace etcdmvp {
 
@@ -46,15 +47,10 @@ void LogJson(const std::string& level,
      << "\"level\":\"" << level << "\","
      << "\"event\":\"" << event << "\","
      << "\"request_id\":\"" << request_id << "\","
+     << "\"trace_id\":\"" << request_id << "\","
      << "\"message\":\"" << message << "\"";
   ss << "}";
   std::cout << ss.str() << std::endl;
-}
-
-std::string LeaderAddress(const std::unordered_map<int64_t, std::string>& peers, int64_t leader_id) {
-  auto it = peers.find(leader_id);
-  if (it == peers.end()) return "";
-  return it->second;
 }
 
 ResponseHeader MakeHeader(ErrorCode code,
@@ -69,28 +65,42 @@ ResponseHeader MakeHeader(ErrorCode code,
   return h;
 }
 
+bool WaitForRevision(KvEngine* kv, uint64_t before, int timeout_seconds, grpc::ServerContext* ctx, uint64_t& out_rev) {
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (ctx->IsCancelled()) break;
+    uint64_t now = kv->Revision();
+    if (now > before) {
+      out_rev = now;
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
 class GrpcKvService final : public KV::Service {
 public:
   GrpcKvService(int64_t node_id,
-                MvpCluster* cluster,
+                EtcdNode* node,
                 const std::unordered_map<int64_t, std::string>& peer_addresses)
-      : node_id_(node_id), cluster_(cluster), peer_addresses_(peer_addresses) {}
+      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
 
   grpc::Status Put(grpc::ServerContext* context, const PutRequest* request, PutResponse* response) override {
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "put_received", request_id, "put request received");
 
-    int64_t leader_id = cluster_->LeaderId();
+    int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
-                                                      LeaderAddress(peer_addresses_, leader_id),
+                                                      node_->LeaderAddress(),
                                                       request_id,
                                                       "not leader"));
       LogJson("WARN", "put_not_leader", request_id, "request routed to follower");
       return grpc::Status::OK;
     }
 
-    KvEngine* kv = cluster_->KvById(node_id_);
+    KvEngine* kv = node_->Kv();
     if (!kv) {
       response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "kv engine missing"));
       return grpc::Status::OK;
@@ -101,23 +111,20 @@ public:
     std::string value(reinterpret_cast<const char*>(request->value().data()), request->value().size());
 
     LogJson("INFO", "wal_append", request_id, "propose entry");
-    RaftNode* leader = cluster_->NodeById(node_id_);
-    if (!leader || !leader->Propose("PUT " + key + " " + value)) {
+    RaftNode* leader = node_->Raft();
+    std::ostringstream cmd;
+    cmd << "PUT " << key << " " << request->lease() << " " << value;
+    if (!leader || !leader->Propose(cmd.str())) {
       response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "propose failed"));
       return grpc::Status::OK;
     }
 
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(RpcTimeoutSeconds());
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (context->IsCancelled()) break;
-      uint64_t now = kv->Revision();
-      if (now > before) {
-        response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
-        response->set_revision(static_cast<int64_t>(now));
-        LogJson("INFO", "put_committed", request_id, "commit applied");
-        return grpc::Status::OK;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    uint64_t committed = 0;
+    if (WaitForRevision(kv, before, RpcTimeoutSeconds(), context, committed)) {
+      response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+      response->set_revision(static_cast<int64_t>(committed));
+      LogJson("INFO", "put_committed", request_id, "commit applied");
+      return grpc::Status::OK;
     }
 
     response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
@@ -128,16 +135,16 @@ public:
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "get_received", request_id, "get request received");
 
-    int64_t leader_id = cluster_->LeaderId();
+    int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
-                                                      LeaderAddress(peer_addresses_, leader_id),
+                                                      node_->LeaderAddress(),
                                                       request_id,
                                                       "not leader"));
       return grpc::Status::OK;
     }
 
-    KvEngine* kv = cluster_->KvById(node_id_);
+    KvEngine* kv = node_->Kv();
     if (!kv) {
       response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "kv engine missing"));
       return grpc::Status::OK;
@@ -145,10 +152,20 @@ public:
 
     std::string key(reinterpret_cast<const char*>(request->key().data()), request->key().size());
     std::string value;
+    uint64_t create_rev = 0;
+    uint64_t mod_rev = 0;
+    uint64_t version = 0;
+    int64_t lease = 0;
+
     if (kv->Get(key, value)) {
+      kv->GetMetadata(key, create_rev, mod_rev, version, lease);
       auto* kvmsg = response->add_kvs();
       kvmsg->set_key(request->key());
       kvmsg->set_value(value);
+      kvmsg->set_create_revision(static_cast<int64_t>(create_rev));
+      kvmsg->set_mod_revision(static_cast<int64_t>(mod_rev));
+      kvmsg->set_version(static_cast<int64_t>(version));
+      kvmsg->set_lease(lease);
       response->set_revision(static_cast<int64_t>(kv->Revision()));
       response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
     } else {
@@ -162,16 +179,16 @@ public:
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "delete_received", request_id, "delete request received");
 
-    int64_t leader_id = cluster_->LeaderId();
+    int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
-                                                      LeaderAddress(peer_addresses_, leader_id),
+                                                      node_->LeaderAddress(),
                                                       request_id,
                                                       "not leader"));
       return grpc::Status::OK;
     }
 
-    KvEngine* kv = cluster_->KvById(node_id_);
+    KvEngine* kv = node_->Kv();
     if (!kv) {
       response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "kv engine missing"));
       return grpc::Status::OK;
@@ -180,42 +197,113 @@ public:
     uint64_t before = kv->Revision();
     std::string key(reinterpret_cast<const char*>(request->key().data()), request->key().size());
 
-    RaftNode* leader = cluster_->NodeById(node_id_);
+    RaftNode* leader = node_->Raft();
     if (!leader || !leader->Propose("DEL " + key)) {
       response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "propose failed"));
       return grpc::Status::OK;
     }
 
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(RpcTimeoutSeconds());
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (context->IsCancelled()) break;
-      uint64_t now = kv->Revision();
-      if (now > before) {
-        response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
-        response->set_revision(static_cast<int64_t>(now));
-        response->set_deleted(1);
-        LogJson("INFO", "delete_committed", request_id, "commit applied");
-        return grpc::Status::OK;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    uint64_t committed = 0;
+    if (WaitForRevision(kv, before, RpcTimeoutSeconds(), context, committed)) {
+      response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+      response->set_revision(static_cast<int64_t>(committed));
+      response->set_deleted(1);
+      LogJson("INFO", "delete_committed", request_id, "commit applied");
+      return grpc::Status::OK;
     }
 
     response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
     return grpc::Status::OK;
   }
 
+  grpc::Status Txn(grpc::ServerContext* context, const TxnRequest* request, TxnResponse* response) override {
+    std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
+    LogJson("INFO", "txn_received", request_id, "txn request received");
+
+    int64_t leader_id = node_->LeaderId();
+    if (leader_id != node_id_) {
+      response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
+                                                      node_->LeaderAddress(),
+                                                      request_id,
+                                                      "not leader"));
+      return grpc::Status::OK;
+    }
+
+    KvEngine* kv = node_->Kv();
+    if (!kv) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "kv engine missing"));
+      return grpc::Status::OK;
+    }
+
+    bool succeeded = true;
+    for (const auto& cmp : request->compare()) {
+      std::string key(reinterpret_cast<const char*>(cmp.key().data()), cmp.key().size());
+      std::string value;
+      uint64_t create_rev = 0;
+      uint64_t mod_rev = 0;
+      uint64_t version = 0;
+      int64_t lease = 0;
+      bool exists = kv->Get(key, value);
+      kv->GetMetadata(key, create_rev, mod_rev, version, lease);
+
+      bool ok = false;
+      if (cmp.target() == VALUE) {
+        std::string cmp_val(reinterpret_cast<const char*>(cmp.value().data()), cmp.value().size());
+        if (!exists) value.clear();
+        if (cmp.result() == EQUAL) ok = (value == cmp_val);
+        if (cmp.result() == NOT_EQUAL) ok = (value != cmp_val);
+      } else if (cmp.target() == MOD) {
+        int64_t rev = static_cast<int64_t>(mod_rev);
+        if (cmp.result() == EQUAL) ok = (rev == cmp.revision());
+        if (cmp.result() == NOT_EQUAL) ok = (rev != cmp.revision());
+        if (cmp.result() == GREATER) ok = (rev > cmp.revision());
+        if (cmp.result() == LESS) ok = (rev < cmp.revision());
+      }
+      if (!ok) {
+        succeeded = false;
+        break;
+      }
+    }
+
+    const auto& ops = succeeded ? request->success() : request->failure();
+    response->set_succeeded(succeeded);
+
+    for (const auto& op : ops) {
+      ResponseOp* resp = response->add_responses();
+      if (op.has_put_request()) {
+        PutRequest req = op.put_request();
+        PutResponse put_resp;
+        Put(context, &req, &put_resp);
+        resp->mutable_put_response()->CopyFrom(put_resp);
+      } else if (op.has_get_request()) {
+        GetRequest req = op.get_request();
+        GetResponse get_resp;
+        Get(context, &req, &get_resp);
+        resp->mutable_get_response()->CopyFrom(get_resp);
+      } else if (op.has_delete_request()) {
+        DeleteRequest req = op.delete_request();
+        DeleteResponse del_resp;
+        Delete(context, &req, &del_resp);
+        resp->mutable_delete_response()->CopyFrom(del_resp);
+      }
+    }
+
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
 private:
   int64_t node_id_;
-  MvpCluster* cluster_;
+  EtcdNode* node_;
   std::unordered_map<int64_t, std::string> peer_addresses_;
 };
 
 class GrpcWatchService final : public Watch::Service {
 public:
   GrpcWatchService(int64_t node_id,
-                   MvpCluster* cluster,
+                   EtcdNode* node,
                    const std::unordered_map<int64_t, std::string>& peer_addresses)
-      : node_id_(node_id), cluster_(cluster), peer_addresses_(peer_addresses) {}
+      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
 
   grpc::Status Watch(grpc::ServerContext* context,
                      const WatchRequest* request,
@@ -223,11 +311,11 @@ public:
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "watch_received", request_id, "watch request received");
 
-    int64_t leader_id = cluster_->LeaderId();
+    int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       WatchResponse resp;
       resp.mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
-                                                 LeaderAddress(peer_addresses_, leader_id),
+                                                 node_->LeaderAddress(),
                                                  request_id,
                                                  "not leader"));
       writer->Write(resp);
@@ -241,8 +329,8 @@ public:
       return grpc::Status::OK;
     }
 
-    KvEngine* kv = cluster_->KvById(node_id_);
-    WatchManager* wm = cluster_->WatchById(node_id_);
+    KvEngine* kv = node_->Kv();
+    WatchManager* wm = node_->Watch();
     if (!kv || !wm) {
       WatchResponse resp;
       resp.mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "watch manager missing"));
@@ -251,15 +339,18 @@ public:
     }
 
     int64_t start_rev = request->create_request().start_revision();
-    uint64_t current_rev = kv->Revision();
-    uint64_t available_start = current_rev + 1;
-    if (start_rev > 0 && static_cast<uint64_t>(start_rev) < available_start) {
+    uint64_t oldest = wm->OldestRevision();
+    if (start_rev > 0 && static_cast<uint64_t>(start_rev) < oldest) {
       WatchResponse resp;
       resp.mutable_header()->CopyFrom(MakeHeader(HISTORY_UNAVAILABLE, "", request_id, "history unavailable"));
-      resp.set_compact_revision(static_cast<int64_t>(available_start));
+      resp.set_compact_revision(static_cast<int64_t>(oldest));
       writer->Write(resp);
       return grpc::Status::OK;
     }
+
+    std::vector<KvEvent> history;
+    uint64_t start = start_rev > 0 ? static_cast<uint64_t>(start_rev) : oldest;
+    wm->GetHistory(start, history);
 
     std::mutex mu;
     std::condition_variable cv;
@@ -268,7 +359,7 @@ public:
     WatchRequest req;
     req.key = request->create_request().key();
     req.prefix = request->create_request().prefix();
-    req.start_revision = start_rev > 0 ? static_cast<uint64_t>(start_rev) : available_start;
+    req.start_revision = start;
 
     uint64_t watch_id = wm->Register(req, [&](const KvEvent& ev) {
       std::lock_guard<std::mutex> lock(mu);
@@ -277,6 +368,21 @@ public:
     });
 
     LogJson("INFO", "watch_registered", request_id, "watch registered");
+
+    for (const auto& ev : history) {
+      if (!request->create_request().prefix() && ev.key != request->create_request().key()) continue;
+      if (request->create_request().prefix() && ev.key.rfind(request->create_request().key(), 0) != 0) continue;
+      WatchResponse resp;
+      resp.mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+      resp.set_watch_id(static_cast<int64_t>(watch_id));
+      resp.set_revision(static_cast<int64_t>(ev.revision));
+      auto* event = resp.add_events();
+      event->set_type(ev.type == KvEvent::Type::Put ? Event::PUT : Event::DELETE);
+      auto* kvmsg = event->mutable_kv();
+      kvmsg->set_key(ev.key);
+      kvmsg->set_value(ev.value);
+      if (!writer->Write(resp)) break;
+    }
 
     while (!context->IsCancelled()) {
       KvEvent ev;
@@ -296,9 +402,9 @@ public:
       resp.set_revision(static_cast<int64_t>(ev.revision));
       auto* event = resp.add_events();
       event->set_type(ev.type == KvEvent::Type::Put ? Event::PUT : Event::DELETE);
-      auto* kv = event->mutable_kv();
-      kv->set_key(ev.key);
-      kv->set_value(ev.value);
+      auto* kvmsg = event->mutable_kv();
+      kvmsg->set_key(ev.key);
+      kvmsg->set_value(ev.value);
 
       if (!writer->Write(resp)) break;
       LogJson("INFO", "watch_dispatch", request_id, "watch event dispatched");
@@ -310,16 +416,72 @@ public:
 
 private:
   int64_t node_id_;
-  MvpCluster* cluster_;
+  EtcdNode* node_;
+  std::unordered_map<int64_t, std::string> peer_addresses_;
+};
+
+class GrpcLeaseService final : public Lease::Service {
+public:
+  GrpcLeaseService(int64_t node_id,
+                   EtcdNode* node,
+                   const std::unordered_map<int64_t, std::string>& peer_addresses)
+      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
+
+  grpc::Status LeaseGrant(grpc::ServerContext*, const LeaseGrantRequest* request, LeaseGrantResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    if (node_->LeaderId() != node_id_) {
+      response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
+      return grpc::Status::OK;
+    }
+    int64_t ttl = request->ttl();
+    if (ttl <= 0) ttl = 5;
+    int64_t id = node_->Leases()->Grant(ttl);
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    response->set_id(id);
+    response->set_ttl(ttl);
+    return grpc::Status::OK;
+  }
+
+  grpc::Status LeaseRevoke(grpc::ServerContext*, const LeaseRevokeRequest* request, LeaseRevokeResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    if (node_->LeaderId() != node_id_) {
+      response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
+      return grpc::Status::OK;
+    }
+    node_->Leases()->Revoke(request->id());
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status LeaseKeepAlive(grpc::ServerContext*, const LeaseKeepAliveRequest* request, LeaseKeepAliveResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    if (node_->LeaderId() != node_id_) {
+      response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
+      return grpc::Status::OK;
+    }
+    int64_t ttl = 0;
+    if (!node_->Leases()->KeepAlive(request->id(), 0, ttl)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "lease not found"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    response->set_id(request->id());
+    response->set_ttl(ttl);
+    return grpc::Status::OK;
+  }
+
+private:
+  int64_t node_id_;
+  EtcdNode* node_;
   std::unordered_map<int64_t, std::string> peer_addresses_;
 };
 
 class GrpcClusterService final : public ::etcdmvp::Cluster::Service {
 public:
   GrpcClusterService(int64_t node_id,
-                     MvpCluster* cluster,
+                     EtcdNode* node,
                      const std::unordered_map<int64_t, std::string>& peer_addresses)
-      : node_id_(node_id), cluster_(cluster), peer_addresses_(peer_addresses) {}
+      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
 
   grpc::Status MemberList(grpc::ServerContext*, const Empty*, MemberListResponse* response) override {
     std::string request_id = GenerateRequestId();
@@ -335,8 +497,8 @@ public:
 
   grpc::Status Status(grpc::ServerContext*, const Empty*, StatusResponse* response) override {
     std::string request_id = GenerateRequestId();
-    response->set_leader(cluster_->LeaderId());
-    KvEngine* kv = cluster_->KvById(node_id_);
+    response->set_leader(node_->LeaderId());
+    KvEngine* kv = node_->Kv();
     if (kv) response->set_revision(static_cast<int64_t>(kv->Revision()));
     response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
     return grpc::Status::OK;
@@ -344,28 +506,71 @@ public:
 
 private:
   int64_t node_id_;
-  MvpCluster* cluster_;
+  EtcdNode* node_;
   std::unordered_map<int64_t, std::string> peer_addresses_;
+};
+
+class GrpcRaftService final : public ::etcdmvp::Raft::Service {
+public:
+  explicit GrpcRaftService(EtcdNode* node) : node_(node) {}
+
+  grpc::Status AppendEntries(grpc::ServerContext*, const ::etcdmvp::AppendEntriesRequest* request,
+                             ::etcdmvp::AppendEntriesResponse* response) override {
+    RaftAppendEntriesRequest req;
+    req.term = request->term();
+    req.leader_id = request->leader_id();
+    req.prev_log_index = request->prev_log_index();
+    req.prev_log_term = request->prev_log_term();
+    req.leader_commit = request->leader_commit();
+    for (const auto& entry : request->entries()) {
+      req.entries.push_back(LogEntry{entry.index(), entry.term(), entry.data()});
+    }
+    auto resp = node_->Raft()->OnAppendEntries(req);
+    response->set_term(resp.term);
+    response->set_success(resp.success);
+    response->set_match_index(resp.match_index);
+    return grpc::Status::OK;
+  }
+
+  grpc::Status RequestVote(grpc::ServerContext*, const ::etcdmvp::RequestVoteRequest* request,
+                           ::etcdmvp::RequestVoteResponse* response) override {
+    RaftRequestVoteRequest req;
+    req.term = request->term();
+    req.candidate_id = request->candidate_id();
+    req.last_log_index = request->last_log_index();
+    req.last_log_term = request->last_log_term();
+    auto resp = node_->Raft()->OnRequestVote(req);
+    response->set_term(resp.term);
+    response->set_vote_granted(resp.vote_granted);
+    return grpc::Status::OK;
+  }
+
+private:
+  EtcdNode* node_;
 };
 
 } // namespace
 
 GrpcServer::GrpcServer(int64_t node_id,
                        const std::string& address,
-                       MvpCluster* cluster,
+                       EtcdNode* node,
                        const std::unordered_map<int64_t, std::string>& peer_addresses)
-    : node_id_(node_id), address_(address), cluster_(cluster), peer_addresses_(peer_addresses) {}
+    : node_id_(node_id), address_(address), node_(node), peer_addresses_(peer_addresses) {}
 
 void GrpcServer::Start() {
-  auto kv_service = std::make_unique<GrpcKvService>(node_id_, cluster_, peer_addresses_);
-  auto watch_service = std::make_unique<GrpcWatchService>(node_id_, cluster_, peer_addresses_);
-  auto cluster_service = std::make_unique<GrpcClusterService>(node_id_, cluster_, peer_addresses_);
+  auto kv_service = std::make_unique<GrpcKvService>(node_id_, node_, peer_addresses_);
+  auto watch_service = std::make_unique<GrpcWatchService>(node_id_, node_, peer_addresses_);
+  auto lease_service = std::make_unique<GrpcLeaseService>(node_id_, node_, peer_addresses_);
+  auto cluster_service = std::make_unique<GrpcClusterService>(node_id_, node_, peer_addresses_);
+  auto raft_service = std::make_unique<GrpcRaftService>(node_);
 
   grpc::ServerBuilder builder;
   builder.AddListeningPort(address_, grpc::InsecureServerCredentials());
   builder.RegisterService(kv_service.get());
   builder.RegisterService(watch_service.get());
+  builder.RegisterService(lease_service.get());
   builder.RegisterService(cluster_service.get());
+  builder.RegisterService(raft_service.get());
   server_ = builder.BuildAndStart();
 
   LogJson("INFO", "grpc_started", GenerateRequestId(), "listening on " + address_);

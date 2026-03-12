@@ -2,6 +2,7 @@
 
 #include "etcdmvp/kv/kv_engine.h"
 #include "etcdmvp/raft/raft.h"
+#include "etcdmvp/storage/config.h"
 #include "etcdmvp/storage/snapshot.h"
 #include "etcdmvp/storage/wal.h"
 #include "etcdmvp/watch/watch_manager.h"
@@ -15,8 +16,8 @@ namespace etcdmvp {
 class InProcTransport : public ITransport {
 public:
   void RegisterNode(int64_t id, RaftNode* node);
-  AppendEntriesResponse SendAppendEntries(int64_t target_id, const AppendEntriesRequest& req) override;
-  RequestVoteResponse SendRequestVote(int64_t target_id, const RequestVoteRequest& req) override;
+  RaftAppendEntriesResponse SendAppendEntries(int64_t target_id, const RaftAppendEntriesRequest& req) override;
+  RaftRequestVoteResponse SendRequestVote(int64_t target_id, const RaftRequestVoteRequest& req) override;
 
 private:
   std::unordered_map<int64_t, RaftNode*> nodes_;
@@ -43,10 +44,16 @@ public:
   WatchManager* WatchById(int64_t id) const;
 
 private:
+  void SetupSnapshotHooks();
+
   int size_;
   std::vector<int64_t> ids_;
 
   std::unique_ptr<InProcTransport> transport_;
+  std::vector<StorageConfig> configs_;
+  std::vector<std::unique_ptr<SnapshotFile>> snapshots_;
+  std::vector<uint64_t> last_snapshot_revision_;
+
   std::vector<std::unique_ptr<WatchManager>> watch_managers_;
   std::vector<std::unique_ptr<KvEngine>> kv_engines_;
   std::vector<std::unique_ptr<WalFile>> wals_;

@@ -25,19 +25,25 @@ RaftNode::RaftNode(int64_t id,
       transport_(transport),
       wal_(wal),
       state_machine_(state_machine) {
-  log_.push_back(LogEntry{});
   if (wal_) {
     std::vector<LogEntry> loaded;
     HardState hs;
     if (wal_->Load(loaded, hs)) {
       hs_ = hs;
       log_ = std::move(loaded);
-      if (log_.empty()) {
-        log_.push_back(LogEntry{});
-      }
     }
   }
+  if (log_.empty()) {
+    log_.push_back(LogEntry{0, 0, ""});
+  }
+  log_base_index_ = log_.front().index;
+  last_applied_ = log_base_index_;
   election_timeout_ms_ = RandomInRange(300, 500);
+}
+
+void RaftNode::SetTransport(ITransport* transport) {
+  std::lock_guard<std::mutex> lock(mu_);
+  transport_ = transport;
 }
 
 void RaftNode::Start() {
@@ -59,14 +65,19 @@ bool RaftNode::IsLeader() const {
 
 int64_t RaftNode::Id() const { return id_; }
 
+int64_t RaftNode::LeaderId() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return leader_id_;
+}
+
 RaftNode::Role RaftNode::GetRole() const {
   std::lock_guard<std::mutex> lock(mu_);
   return role_;
 }
 
-AppendEntriesResponse RaftNode::OnAppendEntries(const AppendEntriesRequest& req) {
+RaftAppendEntriesResponse RaftNode::OnAppendEntries(const RaftAppendEntriesRequest& req) {
   std::lock_guard<std::mutex> lock(mu_);
-  AppendEntriesResponse resp;
+  RaftAppendEntriesResponse resp;
   resp.term = hs_.current_term;
 
   if (req.term < hs_.current_term) {
@@ -78,6 +89,7 @@ AppendEntriesResponse RaftNode::OnAppendEntries(const AppendEntriesRequest& req)
     BecomeFollower(req.term);
   }
 
+  leader_id_ = req.leader_id;
   elapsed_since_heartbeat_ms_ = 0;
 
   if (!LogMatches(req.prev_log_index, req.prev_log_term)) {
@@ -87,12 +99,13 @@ AppendEntriesResponse RaftNode::OnAppendEntries(const AppendEntriesRequest& req)
 
   uint64_t index = req.prev_log_index + 1;
   for (const auto& entry : req.entries) {
-    if (index < log_.size()) {
-      if (log_[index].term != entry.term) {
-        log_.resize(index);
+    if (index <= LastLogIndex()) {
+      size_t off = Offset(index);
+      if (off < log_.size() && log_[off].term != entry.term) {
+        log_.resize(off);
       }
     }
-    if (index >= log_.size()) {
+    if (index > LastLogIndex()) {
       log_.push_back(entry);
       if (wal_) {
         wal_->Append(entry);
@@ -114,9 +127,9 @@ AppendEntriesResponse RaftNode::OnAppendEntries(const AppendEntriesRequest& req)
   return resp;
 }
 
-RequestVoteResponse RaftNode::OnRequestVote(const RequestVoteRequest& req) {
+RaftRequestVoteResponse RaftNode::OnRequestVote(const RaftRequestVoteRequest& req) {
   std::lock_guard<std::mutex> lock(mu_);
-  RequestVoteResponse resp;
+  RaftRequestVoteResponse resp;
   resp.term = hs_.current_term;
 
   if (req.term < hs_.current_term) {
@@ -158,6 +171,24 @@ bool RaftNode::Propose(const std::string& command) {
   }
   return true;
 }
+
+uint64_t RaftNode::LastLogIndex() const {
+  return log_base_index_ + static_cast<uint64_t>(log_.size() - 1);
+}
+
+uint64_t RaftNode::LastLogTerm() const {
+  if (log_.empty()) return 0;
+  return log_.back().term;
+}
+
+uint64_t RaftNode::LogTermAt(uint64_t index) const {
+  if (index < log_base_index_) return 0;
+  size_t off = index - log_base_index_;
+  if (off >= log_.size()) return 0;
+  return log_[off].term;
+}
+
+uint64_t RaftNode::LogBaseIndex() const { return log_base_index_; }
 
 void RaftNode::RunLoop() {
   while (true) {
@@ -233,7 +264,8 @@ void RaftNode::BecomeCandidate() {
 
   int votes = 1;
   for (auto peer : peers_) {
-    RequestVoteRequest req;
+    if (!transport_) continue;
+    RaftRequestVoteRequest req;
     req.term = term;
     req.candidate_id = id_;
     req.last_log_index = last_index;
@@ -255,6 +287,7 @@ void RaftNode::BecomeCandidate() {
 void RaftNode::BecomeLeader() {
   std::lock_guard<std::mutex> lock(mu_);
   role_ = Role::Leader;
+  leader_id_ = id_;
   for (auto peer : peers_) {
     next_index_[peer] = LastLogIndex() + 1;
     match_index_[peer] = 0;
@@ -266,25 +299,30 @@ void RaftNode::SendHeartbeats() {
   std::vector<int64_t> peers = peers_;
   uint64_t term;
   uint64_t commit_index;
+  uint64_t base_index;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (role_ != Role::Leader) return;
     term = hs_.current_term;
     commit_index = hs_.commit_index;
+    base_index = log_base_index_;
   }
 
   for (auto peer : peers) {
-    AppendEntriesRequest req;
+    if (!transport_) continue;
+    RaftAppendEntriesRequest req;
     {
       std::lock_guard<std::mutex> lock(mu_);
       uint64_t next = next_index_[peer];
+      if (next < base_index + 1) next = base_index + 1;
       req.term = term;
       req.leader_id = id_;
       req.prev_log_index = next - 1;
-      req.prev_log_term = (next - 1 < log_.size()) ? log_[next - 1].term : 0;
+      req.prev_log_term = LogTermAt(req.prev_log_index);
       req.leader_commit = commit_index;
-      if (next < log_.size()) {
-        req.entries.assign(log_.begin() + static_cast<long>(next), log_.end());
+      if (next <= LastLogIndex()) {
+        size_t off = Offset(next);
+        req.entries.assign(log_.begin() + static_cast<long>(off), log_.end());
       }
     }
 
@@ -298,7 +336,7 @@ void RaftNode::SendHeartbeats() {
       match_index_[peer] = req.prev_log_index + req.entries.size();
       next_index_[peer] = match_index_[peer] + 1;
     } else {
-      if (next_index_[peer] > 1) next_index_[peer] -= 1;
+      if (next_index_[peer] > base_index + 1) next_index_[peer] -= 1;
     }
   }
 }
@@ -311,7 +349,7 @@ void RaftNode::AdvanceCommitIndex() {
     for (auto peer : peers_) {
       if (match_index_[peer] >= idx) match++;
     }
-    if (match > static_cast<int>(peers_.size() + 1) / 2 && log_[idx].term == hs_.current_term) {
+    if (match > static_cast<int>(peers_.size() + 1) / 2 && LogTermAt(idx) == hs_.current_term) {
       hs_.commit_index = idx;
       if (wal_) {
         wal_->SaveHardState(hs_);
@@ -325,10 +363,14 @@ void RaftNode::ApplyCommitted() {
   std::vector<LogEntry> to_apply;
   {
     std::lock_guard<std::mutex> lock(mu_);
+    if (last_applied_ < log_base_index_) last_applied_ = log_base_index_;
     while (last_applied_ < hs_.commit_index) {
       last_applied_++;
-      if (last_applied_ < log_.size()) {
-        to_apply.push_back(log_[last_applied_]);
+      if (last_applied_ >= log_base_index_ && last_applied_ <= LastLogIndex()) {
+        size_t off = Offset(last_applied_);
+        if (off < log_.size()) {
+          to_apply.push_back(log_[off]);
+        }
       }
     }
   }
@@ -337,17 +379,12 @@ void RaftNode::ApplyCommitted() {
   }
 }
 
-uint64_t RaftNode::LastLogIndex() const {
-  return static_cast<uint64_t>(log_.size() - 1);
-}
-
-uint64_t RaftNode::LastLogTerm() const {
-  return log_.empty() ? 0 : log_.back().term;
-}
-
 bool RaftNode::LogMatches(uint64_t index, uint64_t term) const {
-  if (index >= log_.size()) return false;
-  return log_[index].term == term;
+  return LogTermAt(index) == term;
+}
+
+size_t RaftNode::Offset(uint64_t index) const {
+  return static_cast<size_t>(index - log_base_index_);
 }
 
 } // namespace etcdmvp

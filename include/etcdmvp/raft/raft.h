@@ -21,7 +21,7 @@ struct HardState {
   uint64_t commit_index = 0;
 };
 
-struct AppendEntriesRequest {
+struct RaftAppendEntriesRequest {
   uint64_t term = 0;
   int64_t leader_id = -1;
   uint64_t prev_log_index = 0;
@@ -30,20 +30,20 @@ struct AppendEntriesRequest {
   uint64_t leader_commit = 0;
 };
 
-struct AppendEntriesResponse {
+struct RaftAppendEntriesResponse {
   uint64_t term = 0;
   bool success = false;
   uint64_t match_index = 0;
 };
 
-struct RequestVoteRequest {
+struct RaftRequestVoteRequest {
   uint64_t term = 0;
   int64_t candidate_id = -1;
   uint64_t last_log_index = 0;
   uint64_t last_log_term = 0;
 };
 
-struct RequestVoteResponse {
+struct RaftRequestVoteResponse {
   uint64_t term = 0;
   bool vote_granted = false;
 };
@@ -51,8 +51,8 @@ struct RequestVoteResponse {
 class ITransport {
 public:
   virtual ~ITransport() = default;
-  virtual AppendEntriesResponse SendAppendEntries(int64_t target_id, const AppendEntriesRequest& req) = 0;
-  virtual RequestVoteResponse SendRequestVote(int64_t target_id, const RequestVoteRequest& req) = 0;
+  virtual RaftAppendEntriesResponse SendAppendEntries(int64_t target_id, const RaftAppendEntriesRequest& req) = 0;
+  virtual RaftRequestVoteResponse SendRequestVote(int64_t target_id, const RaftRequestVoteRequest& req) = 0;
 };
 
 class IStateMachine {
@@ -79,17 +79,25 @@ public:
            IWal* wal,
            IStateMachine* state_machine);
 
+  void SetTransport(ITransport* transport);
+
   void Start();
   void Stop();
 
   bool IsLeader() const;
   int64_t Id() const;
+  int64_t LeaderId() const;
   Role GetRole() const;
 
-  AppendEntriesResponse OnAppendEntries(const AppendEntriesRequest& req);
-  RequestVoteResponse OnRequestVote(const RequestVoteRequest& req);
+  RaftAppendEntriesResponse OnAppendEntries(const RaftAppendEntriesRequest& req);
+  RaftRequestVoteResponse OnRequestVote(const RaftRequestVoteRequest& req);
 
   bool Propose(const std::string& command);
+
+  uint64_t LastLogIndex() const;
+  uint64_t LastLogTerm() const;
+  uint64_t LogTermAt(uint64_t index) const;
+  uint64_t LogBaseIndex() const;
 
 private:
   void RunLoop();
@@ -101,9 +109,8 @@ private:
   void AdvanceCommitIndex();
   void ApplyCommitted();
 
-  uint64_t LastLogIndex() const;
-  uint64_t LastLogTerm() const;
   bool LogMatches(uint64_t index, uint64_t term) const;
+  size_t Offset(uint64_t index) const;
 
   int64_t id_;
   std::vector<int64_t> peers_;
@@ -116,8 +123,11 @@ private:
   bool running_ = false;
 
   HardState hs_;
-  std::vector<LogEntry> log_; // log_[0] is dummy
+  std::vector<LogEntry> log_;
+  uint64_t log_base_index_ = 0;
   uint64_t last_applied_ = 0;
+
+  int64_t leader_id_ = -1;
 
   std::unordered_map<int64_t, uint64_t> next_index_;
   std::unordered_map<int64_t, uint64_t> match_index_;

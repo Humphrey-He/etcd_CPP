@@ -27,11 +27,15 @@ add_custom_command(
 
 add_library(etcdmvp
   src/raft.cpp
+  src/raft_grpc_transport.cpp
   src/storage_wal.cpp
   src/storage_snapshot.cpp
+  src/storage_config.cpp
+  src/lease_manager.cpp
   src/kv_engine.cpp
   src/watch_manager.cpp
   src/cluster.cpp
+  src/node.cpp
   src/grpc_server.cpp
   ${PROTO_SRCS}
   ${CMAKE_CURRENT_BINARY_DIR}/etcd_mvp.grpc.pb.cc
@@ -53,3 +57,9 @@ add_executable(etcd_mvp
 )
 
 target_link_libraries(etcd_mvp PRIVATE etcdmvp)
+
+add_executable(etcd_mvp_client
+  examples/grpc_client.cpp
+)
+
+target_link_libraries(etcd_mvp_client PRIVATE etcdmvp)
