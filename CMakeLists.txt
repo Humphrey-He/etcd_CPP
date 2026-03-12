@@ -1,9 +1,10 @@
-﻿cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16)
 project(etcd_mvp LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(ETCD_MVP_BUILD_TESTS "Build unit tests" ON)
 set(PROTO_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/proto)
 set(PROTO_FILE ${PROTO_SRC_DIR}/etcd_mvp.proto)
 
@@ -63,3 +64,36 @@ add_executable(etcd_mvp_client
 )
 
 target_link_libraries(etcd_mvp_client PRIVATE etcdmvp)
+
+if(ETCD_MVP_BUILD_TESTS)
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/release-1.12.1.zip
+  )
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+
+  enable_testing()
+
+  add_executable(etcdmvp_tests
+    tests/test_wal.cpp
+    tests/test_snapshot.cpp
+    tests/test_watch_manager.cpp
+    tests/test_kv_engine.cpp
+    tests/test_lease_manager.cpp
+    tests/test_raft.cpp
+  )
+
+  target_include_directories(etcdmvp_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+
+  target_link_libraries(etcdmvp_tests PRIVATE
+    etcdmvp
+    GTest::gtest_main
+  )
+
+  include(GoogleTest)
+  gtest_discover_tests(etcdmvp_tests)
+endif()
