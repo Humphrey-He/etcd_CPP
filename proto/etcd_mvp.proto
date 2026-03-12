@@ -1,0 +1,127 @@
+﻿syntax = "proto3";
+
+package etcdmvp;
+
+service KV {
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+service Watch {
+  rpc Watch(WatchRequest) returns (stream WatchResponse);
+}
+
+service Cluster {
+  rpc MemberList(Empty) returns (MemberListResponse);
+  rpc Status(Empty) returns (StatusResponse);
+}
+
+message Empty {}
+
+enum ErrorCode {
+  OK = 0;
+  NOT_LEADER = 1;
+  HISTORY_UNAVAILABLE = 2;
+  INTERNAL = 3;
+}
+
+message ResponseHeader {
+  ErrorCode code = 1;
+  string leader_address = 2;
+  string message = 3;
+  string request_id = 4;
+}
+
+message KeyValue {
+  bytes key = 1;
+  bytes value = 2;
+  int64 create_revision = 3;
+  int64 mod_revision = 4;
+}
+
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+  string request_id = 3;
+}
+
+message PutResponse {
+  ResponseHeader header = 1;
+  int64 revision = 2;
+}
+
+message GetRequest {
+  bytes key = 1;
+  string request_id = 2;
+}
+
+message GetResponse {
+  ResponseHeader header = 1;
+  int64 revision = 2;
+  repeated KeyValue kvs = 3;
+}
+
+message DeleteRequest {
+  bytes key = 1;
+  string request_id = 2;
+}
+
+message DeleteResponse {
+  ResponseHeader header = 1;
+  int64 revision = 2;
+  int64 deleted = 3;
+}
+
+message WatchRequest {
+  oneof request_union {
+    WatchCreateRequest create_request = 1;
+    WatchCancelRequest cancel_request = 2;
+  }
+  string request_id = 3;
+}
+
+message WatchCreateRequest {
+  bytes key = 1;
+  bool prefix = 2;
+  int64 start_revision = 3;
+}
+
+message WatchCancelRequest {
+  int64 watch_id = 1;
+}
+
+message Event {
+  enum EventType {
+    PUT = 0;
+    DELETE = 1;
+  }
+  EventType type = 1;
+  KeyValue kv = 2;
+}
+
+message WatchResponse {
+  ResponseHeader header = 1;
+  int64 watch_id = 2;
+  int64 revision = 3;
+  repeated Event events = 4;
+  bool canceled = 5;
+  int64 compact_revision = 6;
+}
+
+message Member {
+  int64 id = 1;
+  string name = 2;
+  repeated string peer_urls = 3;
+}
+
+message MemberListResponse {
+  ResponseHeader header = 1;
+  repeated Member members = 2;
+}
+
+message StatusResponse {
+  ResponseHeader header = 1;
+  int64 leader = 2;
+  int64 revision = 3;
+}
