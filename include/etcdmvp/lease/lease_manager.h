@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace etcdmvp {
 
@@ -17,9 +18,15 @@ public:
   explicit LeaseManager(ExpireCallback on_expire);
   ~LeaseManager();
 
+  int64_t AllocateId();
   int64_t Grant(int64_t ttl_seconds);
   bool Revoke(int64_t id);
   bool KeepAlive(int64_t id, int64_t ttl_seconds, int64_t& out_ttl);
+  bool GetTTL(int64_t id, int64_t& out_ttl) const;
+
+  void ApplyGrant(int64_t id, int64_t ttl_seconds);
+  bool ApplyKeepAlive(int64_t id, int64_t ttl_seconds, int64_t& out_ttl);
+  bool ApplyRevoke(int64_t id, std::vector<std::string>& out_keys);
 
   void AttachKey(int64_t id, const std::string& key);
   void DetachKey(const std::string& key);

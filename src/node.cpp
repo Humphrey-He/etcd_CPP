@@ -11,8 +11,8 @@ EtcdNode::EtcdNode(int64_t id, const std::unordered_map<int64_t, std::string>& p
   watch_ = std::make_unique<WatchManager>(config_.watch_history_size);
 
   leases_ = std::make_unique<LeaseManager>([this](const std::string& key) {
-    uint64_t rev = 0;
-    if (kv_) kv_->Delete(key, &rev);
+    if (!raft_ || !raft_->IsLeader()) return;
+    raft_->Propose("DEL " + key);
   });
 
   kv_ = std::make_unique<KvEngine>(watch_.get(), leases_.get());
@@ -48,6 +48,7 @@ EtcdNode::EtcdNode(int64_t id, const std::unordered_map<int64_t, std::string>& p
     if (snapshot_->Save(kv, rev, term, meta)) {
       last_snapshot_revision_ = rev;
       wal_->PurgeUpTo(rev);
+      watch_->SaveHistory(config_.data_dir + "/watch_history.bin");
     }
   });
 }
@@ -66,6 +67,8 @@ void EtcdNode::LoadSnapshotAndWal() {
       recovery_error_message_ = snapshot_->LastErrorMessage();
     }
   }
+
+  watch_->LoadHistory(config_.data_dir + "/watch_history.bin");
 
   wal_->SetSnapshotBase(snap_rev, snap_term);
 

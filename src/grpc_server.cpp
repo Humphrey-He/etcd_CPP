@@ -1,4 +1,4 @@
-﻿#include "etcdmvp/grpc_server.h"
+#include "etcdmvp/grpc_server.h"
 
 #include "etcdmvp/kv/kv_engine.h"
 #include "etcdmvp/watch/watch_manager.h"
@@ -20,6 +20,14 @@ namespace etcdmvp {
 
 namespace {
 std::atomic<uint64_t> g_req_seq{1};
+
+struct TxnOp {
+  enum class Type { Put = 1, Del = 2, Get = 3 };
+  Type type;
+  std::string key;
+  std::string value;
+  int64_t lease = 0;
+};
 
 std::string GenerateRequestId() {
   uint64_t v = g_req_seq.fetch_add(1);
@@ -77,6 +85,43 @@ bool WaitForRevision(KvEngine* kv, uint64_t before, int timeout_seconds, grpc::S
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return false;
+}
+
+bool WaitForCommit(RaftNode* raft, uint64_t index, int timeout_seconds, grpc::ServerContext* ctx) {
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (ctx->IsCancelled()) break;
+    if (raft->CommitIndex() >= index) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+void WriteU8(std::string& out, uint8_t v) {
+  out.push_back(static_cast<char>(v));
+}
+
+void WriteU32(std::string& out, uint32_t v) {
+  for (int i = 0; i < 4; ++i) out.push_back(static_cast<char>((v >> (i * 8)) & 0xFF));
+}
+
+void WriteU64(std::string& out, uint64_t v) {
+  for (int i = 0; i < 8; ++i) out.push_back(static_cast<char>((v >> (i * 8)) & 0xFF));
+}
+
+std::string EncodeTxn(const std::vector<TxnOp>& ops) {
+  std::string out;
+  out.append("TXN1", 4);
+  WriteU32(out, static_cast<uint32_t>(ops.size()));
+  for (const auto& op : ops) {
+    WriteU8(out, static_cast<uint8_t>(op.type));
+    WriteU32(out, static_cast<uint32_t>(op.key.size()));
+    out.append(op.key);
+    WriteU32(out, static_cast<uint32_t>(op.value.size()));
+    out.append(op.value);
+    WriteU64(out, static_cast<uint64_t>(op.lease));
+  }
+  return out;
 }
 
 class GrpcKvService final : public KV::Service {
@@ -266,24 +311,54 @@ public:
     }
 
     const auto& ops = succeeded ? request->success() : request->failure();
+    std::vector<TxnOp> write_ops;
+    for (const auto& op : ops) {
+      if (op.has_put_request()) {
+        TxnOp t;
+        t.type = TxnOp::Type::Put;
+        t.key = op.put_request().key();
+        t.value = op.put_request().value();
+        t.lease = op.put_request().lease();
+        write_ops.push_back(std::move(t));
+      } else if (op.has_delete_request()) {
+        TxnOp t;
+        t.type = TxnOp::Type::Del;
+        t.key = op.delete_request().key();
+        write_ops.push_back(std::move(t));
+      }
+    }
+
+    std::string entry = EncodeTxn(write_ops);
+    uint64_t index = 0;
+    if (!node_->Raft()->Propose(entry, &index)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "propose failed"));
+      return grpc::Status::OK;
+    }
+
+    if (!WaitForCommit(node_->Raft(), index, RpcTimeoutSeconds(), context)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
+      return grpc::Status::OK;
+    }
+
     response->set_succeeded(succeeded);
 
     for (const auto& op : ops) {
       ResponseOp* resp = response->add_responses();
       if (op.has_put_request()) {
-        PutRequest req = op.put_request();
         PutResponse put_resp;
-        Put(context, &req, &put_resp);
+        put_resp.mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+        put_resp.set_revision(static_cast<int64_t>(kv->Revision()));
         resp->mutable_put_response()->CopyFrom(put_resp);
       } else if (op.has_get_request()) {
-        GetRequest req = op.get_request();
         GetResponse get_resp;
+        GetRequest req = op.get_request();
         Get(context, &req, &get_resp);
         resp->mutable_get_response()->CopyFrom(get_resp);
       } else if (op.has_delete_request()) {
-        DeleteRequest req = op.delete_request();
         DeleteResponse del_resp;
-        Delete(context, &req, &del_resp);
+        del_resp.mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+        del_resp.set_revision(static_cast<int64_t>(kv->Revision()));
+        del_resp.set_deleted(1);
         resp->mutable_delete_response()->CopyFrom(del_resp);
       }
     }
@@ -329,9 +404,8 @@ public:
       return grpc::Status::OK;
     }
 
-    KvEngine* kv = node_->Kv();
     WatchManager* wm = node_->Watch();
-    if (!kv || !wm) {
+    if (!wm) {
       WatchResponse resp;
       resp.mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "watch manager missing"));
       writer->Write(resp);
@@ -427,7 +501,9 @@ public:
                    const std::unordered_map<int64_t, std::string>& peer_addresses)
       : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
 
-  grpc::Status LeaseGrant(grpc::ServerContext*, const LeaseGrantRequest* request, LeaseGrantResponse* response) override {
+  grpc::Status LeaseGrant(grpc::ServerContext* context,
+                          const LeaseGrantRequest* request,
+                          LeaseGrantResponse* response) override {
     std::string request_id = GenerateRequestId();
     if (node_->LeaderId() != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
@@ -436,37 +512,66 @@ public:
     int64_t ttl = request->ttl();
     if (ttl <= 0) ttl = 5;
     int64_t id = node_->Leases()->Grant(ttl);
+
+    uint64_t index = 0;
+    std::ostringstream cmd;
+    cmd << "LEASE_GRANT " << id << " " << ttl;
+    if (!node_->Raft()->Propose(cmd.str(), &index) ||
+        !WaitForCommit(node_->Raft(), index, RpcTimeoutSeconds(), context)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
+      return grpc::Status::OK;
+    }
+
     response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
     response->set_id(id);
     response->set_ttl(ttl);
     return grpc::Status::OK;
   }
 
-  grpc::Status LeaseRevoke(grpc::ServerContext*, const LeaseRevokeRequest* request, LeaseRevokeResponse* response) override {
+  grpc::Status LeaseRevoke(grpc::ServerContext* context,
+                           const LeaseRevokeRequest* request,
+                           LeaseRevokeResponse* response) override {
     std::string request_id = GenerateRequestId();
     if (node_->LeaderId() != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
       return grpc::Status::OK;
     }
-    node_->Leases()->Revoke(request->id());
+    uint64_t index = 0;
+    std::ostringstream cmd;
+    cmd << "LEASE_REVOKE " << request->id();
+    if (!node_->Raft()->Propose(cmd.str(), &index) ||
+        !WaitForCommit(node_->Raft(), index, RpcTimeoutSeconds(), context)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
+      return grpc::Status::OK;
+    }
     response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
     return grpc::Status::OK;
   }
 
-  grpc::Status LeaseKeepAlive(grpc::ServerContext*, const LeaseKeepAliveRequest* request, LeaseKeepAliveResponse* response) override {
+  grpc::Status LeaseKeepAlive(grpc::ServerContext* context,
+                              const LeaseKeepAliveRequest* request,
+                              LeaseKeepAliveResponse* response) override {
     std::string request_id = GenerateRequestId();
     if (node_->LeaderId() != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER, node_->LeaderAddress(), request_id, "not leader"));
       return grpc::Status::OK;
     }
-    int64_t ttl = 0;
-    if (!node_->Leases()->KeepAlive(request->id(), 0, ttl)) {
-      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "lease not found"));
+    int64_t keep_ttl = 0;
+    if (!node_->Leases()->GetTTL(request->id(), keep_ttl)) {
+      response->mutable_header()->CopyFrom(MakeHeader(NOT_FOUND, "", request_id, "lease not found"));
+      return grpc::Status::OK;
+    }
+    uint64_t index = 0;
+    std::ostringstream cmd;
+    cmd << "LEASE_KEEPALIVE " << request->id() << " " << keep_ttl;
+    if (!node_->Raft()->Propose(cmd.str(), &index) ||
+        !WaitForCommit(node_->Raft(), index, RpcTimeoutSeconds(), context)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "timeout"));
       return grpc::Status::OK;
     }
     response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
     response->set_id(request->id());
-    response->set_ttl(ttl);
+    response->set_ttl(keep_ttl);
     return grpc::Status::OK;
   }
 
@@ -583,3 +688,6 @@ void GrpcServer::Stop() {
 }
 
 } // namespace etcdmvp
+
+
+

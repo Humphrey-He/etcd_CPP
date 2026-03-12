@@ -31,6 +31,9 @@ public:
   bool GetHistory(uint64_t start_revision, std::vector<KvEvent>& out) const;
   uint64_t OldestRevision() const;
 
+  bool SaveHistory(const std::string& path) const;
+  bool LoadHistory(const std::string& path);
+
 private:
   struct Watcher {
     WatchRequest req;

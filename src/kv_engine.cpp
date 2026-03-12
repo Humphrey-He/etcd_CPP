@@ -5,10 +5,70 @@
 
 namespace etcdmvp {
 
+namespace {
+bool ReadU8(const std::string& data, size_t& off, uint8_t& out) {
+  if (off + 1 > data.size()) return false;
+  out = static_cast<uint8_t>(data[off]);
+  off += 1;
+  return true;
+}
+
+bool ReadU32(const std::string& data, size_t& off, uint32_t& out) {
+  if (off + 4 > data.size()) return false;
+  out = 0;
+  for (int i = 0; i < 4; ++i) {
+    out |= (static_cast<uint32_t>(static_cast<unsigned char>(data[off + i])) << (i * 8));
+  }
+  off += 4;
+  return true;
+}
+
+bool ReadU64(const std::string& data, size_t& off, uint64_t& out) {
+  if (off + 8 > data.size()) return false;
+  out = 0;
+  for (int i = 0; i < 8; ++i) {
+    out |= (static_cast<uint64_t>(static_cast<unsigned char>(data[off + i])) << (i * 8));
+  }
+  off += 8;
+  return true;
+}
+}
+
 KvEngine::KvEngine(WatchManager* watch_manager, LeaseManager* lease_manager)
     : watch_manager_(watch_manager), lease_manager_(lease_manager) {}
 
 void KvEngine::Apply(const LogEntry& entry) {
+  if (entry.command.rfind("TXN1", 0) == 0) {
+    size_t off = 4;
+    uint32_t op_count = 0;
+    if (!ReadU32(entry.command, off, op_count)) return;
+    for (uint32_t i = 0; i < op_count; ++i) {
+      uint8_t type = 0;
+      uint32_t klen = 0;
+      uint32_t vlen = 0;
+      uint64_t lease = 0;
+      if (!ReadU8(entry.command, off, type)) return;
+      if (!ReadU32(entry.command, off, klen)) return;
+      if (off + klen > entry.command.size()) return;
+      std::string key = entry.command.substr(off, klen);
+      off += klen;
+      if (!ReadU32(entry.command, off, vlen)) return;
+      if (off + vlen > entry.command.size()) return;
+      std::string value = entry.command.substr(off, vlen);
+      off += vlen;
+      if (!ReadU64(entry.command, off, lease)) return;
+
+      if (type == 1) {
+        uint64_t rev = 0;
+        PutWithLease(key, value, static_cast<int64_t>(lease), &rev);
+      } else if (type == 2) {
+        uint64_t rev = 0;
+        Delete(key, &rev);
+      }
+    }
+    return;
+  }
+
   std::istringstream ss(entry.command);
   std::string op;
   ss >> op;
@@ -27,6 +87,29 @@ void KvEngine::Apply(const LogEntry& entry) {
     ss >> key;
     uint64_t rev = 0;
     Delete(key, &rev);
+  } else if (op == "LEASE_GRANT") {
+    int64_t id = 0;
+    int64_t ttl = 0;
+    ss >> id >> ttl;
+    if (lease_manager_) lease_manager_->ApplyGrant(id, ttl);
+  } else if (op == "LEASE_KEEPALIVE") {
+    int64_t id = 0;
+    int64_t ttl = 0;
+    ss >> id >> ttl;
+    int64_t out = 0;
+    if (lease_manager_) lease_manager_->ApplyKeepAlive(id, ttl, out);
+  } else if (op == "LEASE_REVOKE") {
+    int64_t id = 0;
+    ss >> id;
+    if (lease_manager_) {
+      std::vector<std::string> keys;
+      if (lease_manager_->ApplyRevoke(id, keys)) {
+        for (const auto& key : keys) {
+          uint64_t rev = 0;
+          Delete(key, &rev);
+        }
+      }
+    }
   }
 }
 

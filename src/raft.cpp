@@ -159,6 +159,10 @@ RaftRequestVoteResponse RaftNode::OnRequestVote(const RaftRequestVoteRequest& re
 }
 
 bool RaftNode::Propose(const std::string& command) {
+  return Propose(command, nullptr);
+}
+
+bool RaftNode::Propose(const std::string& command, uint64_t* out_index) {
   std::lock_guard<std::mutex> lock(mu_);
   if (role_ != Role::Leader) return false;
   LogEntry entry;
@@ -169,7 +173,13 @@ bool RaftNode::Propose(const std::string& command) {
   if (wal_) {
     wal_->Append(entry);
   }
+  if (out_index) *out_index = entry.index;
   return true;
+}
+
+uint64_t RaftNode::CommitIndex() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return hs_.commit_index;
 }
 
 uint64_t RaftNode::LastLogIndex() const {

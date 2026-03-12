@@ -8,29 +8,19 @@ LeaseManager::LeaseManager(ExpireCallback on_expire) : on_expire_(std::move(on_e
 
 LeaseManager::~LeaseManager() { Stop(); }
 
+int64_t LeaseManager::AllocateId() {
+  return next_id_.fetch_add(1);
+}
+
 int64_t LeaseManager::Grant(int64_t ttl_seconds) {
-  std::lock_guard<std::mutex> lock(mu_);
-  int64_t id = next_id_.fetch_add(1);
-  Lease lease;
-  lease.id = id;
-  lease.ttl = ttl_seconds;
-  lease.expiry = std::chrono::steady_clock::now() + std::chrono::seconds(ttl_seconds);
-  leases_[id] = std::move(lease);
+  int64_t id = AllocateId();
+  ApplyGrant(id, ttl_seconds);
   return id;
 }
 
 bool LeaseManager::Revoke(int64_t id) {
-  std::unordered_set<std::string> keys;
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    auto it = leases_.find(id);
-    if (it == leases_.end()) return false;
-    keys = it->second.keys;
-    for (const auto& k : keys) {
-      key_leases_.erase(k);
-    }
-    leases_.erase(it);
-  }
+  std::vector<std::string> keys;
+  if (!ApplyRevoke(id, keys)) return false;
   for (const auto& k : keys) {
     if (on_expire_) on_expire_(k);
   }
@@ -38,6 +28,28 @@ bool LeaseManager::Revoke(int64_t id) {
 }
 
 bool LeaseManager::KeepAlive(int64_t id, int64_t ttl_seconds, int64_t& out_ttl) {
+  return ApplyKeepAlive(id, ttl_seconds, out_ttl);
+}
+
+bool LeaseManager::GetTTL(int64_t id, int64_t& out_ttl) const {
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = leases_.find(id);
+  if (it == leases_.end()) return false;
+  out_ttl = it->second.ttl;
+  return true;
+}
+
+void LeaseManager::ApplyGrant(int64_t id, int64_t ttl_seconds) {
+  if (ttl_seconds <= 0) ttl_seconds = 5;
+  std::lock_guard<std::mutex> lock(mu_);
+  Lease lease;
+  lease.id = id;
+  lease.ttl = ttl_seconds;
+  lease.expiry = std::chrono::steady_clock::now() + std::chrono::seconds(ttl_seconds);
+  leases_[id] = std::move(lease);
+}
+
+bool LeaseManager::ApplyKeepAlive(int64_t id, int64_t ttl_seconds, int64_t& out_ttl) {
   std::lock_guard<std::mutex> lock(mu_);
   auto it = leases_.find(id);
   if (it == leases_.end()) return false;
@@ -45,6 +57,18 @@ bool LeaseManager::KeepAlive(int64_t id, int64_t ttl_seconds, int64_t& out_ttl) 
   it->second.ttl = ttl_seconds;
   it->second.expiry = std::chrono::steady_clock::now() + std::chrono::seconds(ttl_seconds);
   out_ttl = it->second.ttl;
+  return true;
+}
+
+bool LeaseManager::ApplyRevoke(int64_t id, std::vector<std::string>& out_keys) {
+  std::lock_guard<std::mutex> lock(mu_);
+  auto it = leases_.find(id);
+  if (it == leases_.end()) return false;
+  out_keys.assign(it->second.keys.begin(), it->second.keys.end());
+  for (const auto& k : out_keys) {
+    key_leases_.erase(k);
+  }
+  leases_.erase(it);
   return true;
 }
 
@@ -92,7 +116,7 @@ void LeaseManager::Stop() {
 
 void LeaseManager::RunLoop() {
   while (true) {
-    std::unordered_set<std::string> expired_keys;
+    std::vector<std::string> expired_keys;
     {
       std::lock_guard<std::mutex> lock(mu_);
       if (!running_) break;
@@ -107,7 +131,7 @@ void LeaseManager::RunLoop() {
         auto it = leases_.find(id);
         if (it == leases_.end()) continue;
         for (const auto& k : it->second.keys) {
-          expired_keys.insert(k);
+          expired_keys.push_back(k);
           key_leases_.erase(k);
         }
         leases_.erase(it);

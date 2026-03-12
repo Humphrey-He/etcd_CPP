@@ -93,7 +93,9 @@ public:
   RaftRequestVoteResponse OnRequestVote(const RaftRequestVoteRequest& req);
 
   bool Propose(const std::string& command);
+  bool Propose(const std::string& command, uint64_t* out_index);
 
+  uint64_t CommitIndex() const;
   uint64_t LastLogIndex() const;
   uint64_t LastLogTerm() const;
   uint64_t LogTermAt(uint64_t index) const;
