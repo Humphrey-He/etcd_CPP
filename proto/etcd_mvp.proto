@@ -37,6 +37,10 @@ enum ErrorCode {
   HISTORY_UNAVAILABLE = 2;
   INTERNAL = 3;
   NOT_FOUND = 4;
+  TIMEOUT = 5;
+  UNAVAILABLE = 6;
+  INVALID_ARGUMENT = 7;
+  RESOURCE_EXHAUSTED = 8;
 }
 
 message ResponseHeader {

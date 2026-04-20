@@ -135,6 +135,17 @@ public:
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "put_received", request_id, "put request received");
 
+    if (request->key().empty()) {
+      response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "key cannot be empty"));
+      return grpc::Status::OK;
+    }
+
+    uint64_t max_size = node_->Config().max_request_size;
+    if (request->key().size() + request->value().size() > max_size) {
+      response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "request size exceeds limit"));
+      return grpc::Status::OK;
+    }
+
     int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,

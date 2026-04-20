@@ -96,4 +96,13 @@ if(ETCD_MVP_BUILD_TESTS)
 
   include(GoogleTest)
   gtest_discover_tests(etcdmvp_tests)
+
+  add_executable(integration_tests
+    tests/integration/integration_tests.cpp
+  )
+
+  target_link_libraries(integration_tests PRIVATE
+    etcdmvp
+    GTest::gtest_main
+  )
 endif()

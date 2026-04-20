@@ -38,6 +38,9 @@ StorageConfig LoadStorageConfig(int64_t node_id) {
                                             cfg.snapshot_threshold_entries);
   cfg.watch_history_size = ParseU64(std::getenv("ETCD_MVP_WATCH_HISTORY_SIZE"), cfg.watch_history_size);
   cfg.fsync_on_write = ParseBool(std::getenv("ETCD_MVP_FSYNC"), cfg.fsync_on_write);
+  cfg.max_request_size = ParseU64(std::getenv("ETCD_MVP_MAX_REQUEST_SIZE"), cfg.max_request_size);
+  cfg.max_concurrent_streams = ParseU64(std::getenv("ETCD_MVP_MAX_CONCURRENT_STREAMS"), cfg.max_concurrent_streams);
+  cfg.max_watchers = ParseU64(std::getenv("ETCD_MVP_MAX_WATCHERS"), cfg.max_watchers);
   return cfg;
 }
 
