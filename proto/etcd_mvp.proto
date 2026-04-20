@@ -24,6 +24,16 @@ service Cluster {
   rpc Status(Empty) returns (StatusResponse);
 }
 
+service Auth {
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+  rpc UserAdd(UserAddRequest) returns (UserAddResponse);
+  rpc UserDelete(UserDeleteRequest) returns (UserDeleteResponse);
+  rpc UserChangePassword(UserChangePasswordRequest) returns (UserChangePasswordResponse);
+  rpc UserGrantRole(UserGrantRoleRequest) returns (UserGrantRoleResponse);
+  rpc RoleAdd(RoleAddRequest) returns (RoleAddResponse);
+  rpc RoleGrantPermission(RoleGrantPermissionRequest) returns (RoleGrantPermissionResponse);
+}
+
 service Raft {
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
   rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
@@ -41,6 +51,8 @@ enum ErrorCode {
   UNAVAILABLE = 6;
   INVALID_ARGUMENT = 7;
   RESOURCE_EXHAUSTED = 8;
+  UNAUTHENTICATED = 9;
+  PERMISSION_DENIED = 10;
 }
 
 message ResponseHeader {
@@ -254,4 +266,80 @@ message RequestVoteRequest {
 message RequestVoteResponse {
   uint64 term = 1;
   bool vote_granted = 2;
+}
+
+enum Permission {
+  READ = 0;
+  WRITE = 1;
+  READWRITE = 2;
+}
+
+message AuthenticateRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message AuthenticateResponse {
+  ResponseHeader header = 1;
+  string token = 2;
+}
+
+message UserAddRequest {
+  string username = 1;
+  string password = 2;
+  string token = 3;
+}
+
+message UserAddResponse {
+  ResponseHeader header = 1;
+}
+
+message UserDeleteRequest {
+  string username = 1;
+  string token = 2;
+}
+
+message UserDeleteResponse {
+  ResponseHeader header = 1;
+}
+
+message UserChangePasswordRequest {
+  string username = 1;
+  string password = 2;
+  string token = 3;
+}
+
+message UserChangePasswordResponse {
+  ResponseHeader header = 1;
+}
+
+message UserGrantRoleRequest {
+  string username = 1;
+  string role = 2;
+  string token = 3;
+}
+
+message UserGrantRoleResponse {
+  ResponseHeader header = 1;
+}
+
+message RoleAddRequest {
+  string name = 1;
+  string token = 2;
+}
+
+message RoleAddResponse {
+  ResponseHeader header = 1;
+}
+
+message RoleGrantPermissionRequest {
+  string role = 1;
+  Permission permission = 2;
+  bytes key = 3;
+  bytes range_end = 4;
+  string token = 5;
+}
+
+message RoleGrantPermissionResponse {
+  ResponseHeader header = 1;
 }

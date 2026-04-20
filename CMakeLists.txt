@@ -38,6 +38,9 @@ add_library(etcdmvp
   src/cluster.cpp
   src/node.cpp
   src/grpc_server.cpp
+  src/tls_config.cpp
+  src/auth_manager.cpp
+  src/logger.cpp
   ${PROTO_SRCS}
   ${CMAKE_CURRENT_BINARY_DIR}/etcd_mvp.grpc.pb.cc
 )
@@ -64,6 +67,12 @@ add_executable(etcd_mvp_client
 )
 
 target_link_libraries(etcd_mvp_client PRIVATE etcdmvp)
+
+add_executable(etcd_mvp_auth_client
+  examples/auth_client.cpp
+)
+
+target_link_libraries(etcd_mvp_auth_client PRIVATE etcdmvp)
 
 if(ETCD_MVP_BUILD_TESTS)
   include(FetchContent)

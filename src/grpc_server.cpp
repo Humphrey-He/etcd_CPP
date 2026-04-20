@@ -128,8 +128,9 @@ class GrpcKvService final : public KV::Service {
 public:
   GrpcKvService(int64_t node_id,
                 EtcdNode* node,
-                const std::unordered_map<int64_t, std::string>& peer_addresses)
-      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses) {}
+                const std::unordered_map<int64_t, std::string>& peer_addresses,
+                AuthManager* auth)
+      : node_id_(node_id), node_(node), peer_addresses_(peer_addresses), auth_(auth) {}
 
   grpc::Status Put(grpc::ServerContext* context, const PutRequest* request, PutResponse* response) override {
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
@@ -137,6 +138,21 @@ public:
 
     if (request->key().empty()) {
       response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "key cannot be empty"));
+      return grpc::Status::OK;
+    }
+
+    std::string token;
+    auto metadata = context->client_metadata();
+    auto it = metadata.find("token");
+    if (it != metadata.end()) {
+      token = std::string(it->second.data(), it->second.size());
+    }
+    if (!CheckAuth(token, request->key(), PermissionType::WRITE, response->mutable_header(), request_id)) {
+      return grpc::Status::OK;
+    }
+
+    if (request->value().size() > node_->Config().max_value_size) {
+      response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "value size exceeds limit"));
       return grpc::Status::OK;
     }
 
@@ -196,6 +212,16 @@ public:
       return grpc::Status::OK;
     }
 
+    std::string token;
+    auto metadata = context->client_metadata();
+    auto it = metadata.find("token");
+    if (it != metadata.end()) {
+      token = std::string(it->second.data(), it->second.size());
+    }
+    if (!CheckAuth(token, request->key(), PermissionType::READ, response->mutable_header(), request_id)) {
+      return grpc::Status::OK;
+    }
+
     int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
@@ -242,6 +268,16 @@ public:
 
     if (request->key().empty()) {
       response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "key cannot be empty"));
+      return grpc::Status::OK;
+    }
+
+    std::string token;
+    auto metadata = context->client_metadata();
+    auto it = metadata.find("token");
+    if (it != metadata.end()) {
+      token = std::string(it->second.data(), it->second.size());
+    }
+    if (!CheckAuth(token, request->key(), PermissionType::WRITE, response->mutable_header(), request_id)) {
       return grpc::Status::OK;
     }
 
@@ -389,9 +425,24 @@ public:
   }
 
 private:
+  bool CheckAuth(const std::string& token, const std::string& key, PermissionType perm, ResponseHeader* header, const std::string& request_id) {
+    if (!auth_->IsEnabled()) return true;
+    std::string username;
+    if (!auth_->ValidateToken(token, username)) {
+      header->CopyFrom(MakeHeader(UNAUTHENTICATED, "", request_id, "invalid token"));
+      return false;
+    }
+    if (!auth_->CheckPermission(username, perm, key)) {
+      header->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "permission denied"));
+      return false;
+    }
+    return true;
+  }
+
   int64_t node_id_;
   EtcdNode* node_;
   std::unordered_map<int64_t, std::string> peer_addresses_;
+  AuthManager* auth_;
 };
 
 class GrpcWatchService final : public Watch::Service {
@@ -636,6 +687,130 @@ private:
   std::unordered_map<int64_t, std::string> peer_addresses_;
 };
 
+class GrpcAuthService final : public ::etcdmvp::Auth::Service {
+public:
+  explicit GrpcAuthService(AuthManager* auth) : auth_(auth) {}
+
+  grpc::Status Authenticate(grpc::ServerContext*, const AuthenticateRequest* request,
+                            AuthenticateResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string token = auth_->Authenticate(request->username(), request->password());
+    if (token.empty()) {
+      response->mutable_header()->CopyFrom(MakeHeader(UNAUTHENTICATED, "", request_id, "invalid credentials"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    response->set_token(token);
+    return grpc::Status::OK;
+  }
+
+  grpc::Status UserAdd(grpc::ServerContext* context, const UserAddRequest* request,
+                       UserAddResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username) || username != "root") {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "admin required"));
+      return grpc::Status::OK;
+    }
+    if (!auth_->AddUser(request->username(), request->password())) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "user exists"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status UserDelete(grpc::ServerContext*, const UserDeleteRequest* request,
+                          UserDeleteResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username) || username != "root") {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "admin required"));
+      return grpc::Status::OK;
+    }
+    if (!auth_->DeleteUser(request->username())) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "delete failed"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status UserChangePassword(grpc::ServerContext*, const UserChangePasswordRequest* request,
+                                   UserChangePasswordResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username)) {
+      response->mutable_header()->CopyFrom(MakeHeader(UNAUTHENTICATED, "", request_id, "invalid token"));
+      return grpc::Status::OK;
+    }
+    if (username != "root" && username != request->username()) {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "permission denied"));
+      return grpc::Status::OK;
+    }
+    if (!auth_->ChangePassword(request->username(), request->password())) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "change failed"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status UserGrantRole(grpc::ServerContext*, const UserGrantRoleRequest* request,
+                             UserGrantRoleResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username) || username != "root") {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "admin required"));
+      return grpc::Status::OK;
+    }
+    if (!auth_->GrantRole(request->username(), request->role())) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "grant failed"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status RoleAdd(grpc::ServerContext*, const RoleAddRequest* request,
+                       RoleAddResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username) || username != "root") {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "admin required"));
+      return grpc::Status::OK;
+    }
+    if (!auth_->AddRole(request->name())) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "role exists"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+  grpc::Status RoleGrantPermission(grpc::ServerContext*, const RoleGrantPermissionRequest* request,
+                                    RoleGrantPermissionResponse* response) override {
+    std::string request_id = GenerateRequestId();
+    std::string username;
+    if (!auth_->ValidateToken(request->token(), username) || username != "root") {
+      response->mutable_header()->CopyFrom(MakeHeader(PERMISSION_DENIED, "", request_id, "admin required"));
+      return grpc::Status::OK;
+    }
+    PermissionType perm = static_cast<PermissionType>(request->permission());
+    std::string key(reinterpret_cast<const char*>(request->key().data()), request->key().size());
+    std::string range_end(reinterpret_cast<const char*>(request->range_end().data()), request->range_end().size());
+    if (!auth_->GrantPermission(request->role(), perm, key, range_end)) {
+      response->mutable_header()->CopyFrom(MakeHeader(INTERNAL, "", request_id, "grant failed"));
+      return grpc::Status::OK;
+    }
+    response->mutable_header()->CopyFrom(MakeHeader(OK, "", request_id, "ok"));
+    return grpc::Status::OK;
+  }
+
+private:
+  AuthManager* auth_;
+};
+
 class GrpcRaftService final : public ::etcdmvp::Raft::Service {
 public:
   explicit GrpcRaftService(EtcdNode* node) : node_(node) {}
@@ -681,25 +856,35 @@ GrpcServer::GrpcServer(int64_t node_id,
                        const std::string& address,
                        EtcdNode* node,
                        const std::unordered_map<int64_t, std::string>& peer_addresses)
-    : node_id_(node_id), address_(address), node_(node), peer_addresses_(peer_addresses) {}
+    : node_id_(node_id), address_(address), node_(node), peer_addresses_(peer_addresses) {
+  tls_.LoadFromEnvironment();
+  if (auth_.IsEnabled()) {
+    auth_.InitRootUser();
+  }
+}
 
 void GrpcServer::Start() {
-  auto kv_service = std::make_unique<GrpcKvService>(node_id_, node_, peer_addresses_);
+  auto kv_service = std::make_unique<GrpcKvService>(node_id_, node_, peer_addresses_, &auth_);
   auto watch_service = std::make_unique<GrpcWatchService>(node_id_, node_, peer_addresses_);
   auto lease_service = std::make_unique<GrpcLeaseService>(node_id_, node_, peer_addresses_);
   auto cluster_service = std::make_unique<GrpcClusterService>(node_id_, node_, peer_addresses_);
   auto raft_service = std::make_unique<GrpcRaftService>(node_);
+  auto auth_service = std::make_unique<GrpcAuthService>(&auth_);
 
   grpc::ServerBuilder builder;
-  builder.AddListeningPort(address_, grpc::InsecureServerCredentials());
+  builder.AddListeningPort(address_, tls_.GetServerCredentials());
   builder.RegisterService(kv_service.get());
   builder.RegisterService(watch_service.get());
   builder.RegisterService(lease_service.get());
   builder.RegisterService(cluster_service.get());
   builder.RegisterService(raft_service.get());
+  builder.RegisterService(auth_service.get());
   server_ = builder.BuildAndStart();
 
-  LogJson("INFO", "grpc_started", GenerateRequestId(), "listening on " + address_);
+  std::string tls_status = tls_.IsEnabled() ? (tls_.IsMutualTlsEnabled() ? "mTLS" : "TLS") : "insecure";
+  std::string auth_status = auth_.IsEnabled() ? "enabled" : "disabled";
+  LogJson("INFO", "grpc_started", GenerateRequestId(),
+          "listening on " + address_ + " (tls=" + tls_status + ", auth=" + auth_status + ")");
 
   server_->Wait();
 }

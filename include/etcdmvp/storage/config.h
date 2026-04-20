@@ -12,6 +12,7 @@ struct StorageConfig {
   uint64_t watch_history_size = 10000;
   bool fsync_on_write = true;
   uint64_t max_request_size = 1024ull * 1024ull;
+  uint64_t max_value_size = 1024ull * 1024ull;
   uint64_t max_concurrent_streams = 1000;
   uint64_t max_watchers = 10000;
 };
