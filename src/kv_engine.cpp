@@ -6,6 +6,7 @@
 namespace etcdmvp {
 
 namespace {
+// Deserialize uint8_t from command string
 bool ReadU8(const std::string& data, size_t& off, uint8_t& out) {
   if (off + 1 > data.size()) return false;
   out = static_cast<uint8_t>(data[off]);
@@ -13,6 +14,7 @@ bool ReadU8(const std::string& data, size_t& off, uint8_t& out) {
   return true;
 }
 
+// Deserialize uint32_t from command string (little-endian)
 bool ReadU32(const std::string& data, size_t& off, uint32_t& out) {
   if (off + 4 > data.size()) return false;
   out = 0;
@@ -23,6 +25,7 @@ bool ReadU32(const std::string& data, size_t& off, uint32_t& out) {
   return true;
 }
 
+// Deserialize uint64_t from command string (little-endian)
 bool ReadU64(const std::string& data, size_t& off, uint64_t& out) {
   if (off + 8 > data.size()) return false;
   out = 0;

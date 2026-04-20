@@ -10,29 +10,34 @@
 
 namespace etcdmvp {
 
+// Permission types for role-based access control
 enum class PermissionType {
   READ = 0,
   WRITE = 1,
   READWRITE = 2
 };
 
+// Permission entry defining access to a key range
 struct Permission {
   PermissionType type;
   std::string key;
   std::string range_end;
 };
 
+// Role containing a set of permissions
 struct Role {
   std::string name;
   std::vector<Permission> permissions;
 };
 
+// User with password hash and assigned roles
 struct User {
   std::string username;
   std::string password_hash;
   std::unordered_set<std::string> roles;
 };
 
+// Authentication manager handling users, roles, and token-based auth
 class AuthManager {
 public:
   AuthManager();
