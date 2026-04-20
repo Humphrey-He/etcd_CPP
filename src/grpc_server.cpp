@@ -191,6 +191,11 @@ public:
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "get_received", request_id, "get request received");
 
+    if (request->key().empty()) {
+      response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "key cannot be empty"));
+      return grpc::Status::OK;
+    }
+
     int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
       response->mutable_header()->CopyFrom(MakeHeader(NOT_LEADER,
@@ -234,6 +239,11 @@ public:
   grpc::Status Delete(grpc::ServerContext* context, const DeleteRequest* request, DeleteResponse* response) override {
     std::string request_id = request->request_id().empty() ? GenerateRequestId() : request->request_id();
     LogJson("INFO", "delete_received", request_id, "delete request received");
+
+    if (request->key().empty()) {
+      response->mutable_header()->CopyFrom(MakeHeader(INVALID_ARGUMENT, "", request_id, "key cannot be empty"));
+      return grpc::Status::OK;
+    }
 
     int64_t leader_id = node_->LeaderId();
     if (leader_id != node_id_) {
