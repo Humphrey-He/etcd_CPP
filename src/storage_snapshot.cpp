@@ -14,10 +14,12 @@
 namespace etcdmvp {
 
 namespace {
+// Serialize uint64_t to stream in little-endian format
 void WriteU64(std::ostream& out, uint64_t v) {
   for (int i = 0; i < 8; ++i) out.put(static_cast<char>((v >> (i * 8)) & 0xFF));
 }
 
+// Deserialize uint64_t from stream in little-endian format
 bool ReadU64(std::istream& in, uint64_t& v) {
   v = 0;
   for (int i = 0; i < 8; ++i) {
@@ -28,6 +30,7 @@ bool ReadU64(std::istream& in, uint64_t& v) {
   return true;
 }
 
+// Force file data to disk (platform-specific fsync)
 bool FsyncFile(const std::string& path) {
 #ifdef _WIN32
   int fd = _open(path.c_str(), _O_BINARY | _O_RDWR);
@@ -48,6 +51,7 @@ bool FsyncFile(const std::string& path) {
 SnapshotFile::SnapshotFile(const StorageConfig& config)
     : config_(config), path_(config.data_dir + "/snapshot.snap") {}
 
+// Save KV state to snapshot file atomically (write to .tmp then rename)
 bool SnapshotFile::Save(const std::unordered_map<std::string, std::string>& kv,
                         uint64_t revision,
                         uint64_t last_term,
@@ -94,6 +98,7 @@ bool SnapshotFile::Save(const std::unordered_map<std::string, std::string>& kv,
   return true;
 }
 
+// Load KV state from snapshot file
 bool SnapshotFile::Load(std::unordered_map<std::string, std::string>& kv,
                         uint64_t& revision,
                         uint64_t& last_term,

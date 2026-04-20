@@ -37,7 +37,9 @@ bool ReadU64(const std::string& data, size_t& off, uint64_t& out) {
 KvEngine::KvEngine(WatchManager* watch_manager, LeaseManager* lease_manager)
     : watch_manager_(watch_manager), lease_manager_(lease_manager) {}
 
+// Apply a committed Raft log entry to the KV state machine
 void KvEngine::Apply(const LogEntry& entry) {
+  // Handle transaction batch (TXN1 format)
   if (entry.command.rfind("TXN1", 0) == 0) {
     size_t off = 4;
     uint32_t op_count = 0;

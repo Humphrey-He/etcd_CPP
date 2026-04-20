@@ -75,16 +75,19 @@ RaftNode::Role RaftNode::GetRole() const {
   return role_;
 }
 
+// Handle AppendEntries RPC from leader (heartbeat or log replication)
 RaftAppendEntriesResponse RaftNode::OnAppendEntries(const RaftAppendEntriesRequest& req) {
   std::lock_guard<std::mutex> lock(mu_);
   RaftAppendEntriesResponse resp;
   resp.term = hs_.current_term;
 
+  // Reject if sender's term is stale
   if (req.term < hs_.current_term) {
     resp.success = false;
     return resp;
   }
 
+  // Step down if sender has higher term
   if (req.term > hs_.current_term) {
     BecomeFollower(req.term);
   }
@@ -92,6 +95,7 @@ RaftAppendEntriesResponse RaftNode::OnAppendEntries(const RaftAppendEntriesReque
   leader_id_ = req.leader_id;
   elapsed_since_heartbeat_ms_ = 0;
 
+  // Reject if log doesn't match at prev_log_index
   if (!LogMatches(req.prev_log_index, req.prev_log_term)) {
     resp.success = false;
     return resp;
@@ -127,23 +131,28 @@ RaftAppendEntriesResponse RaftNode::OnAppendEntries(const RaftAppendEntriesReque
   return resp;
 }
 
+// Handle RequestVote RPC from candidate during election
 RaftRequestVoteResponse RaftNode::OnRequestVote(const RaftRequestVoteRequest& req) {
   std::lock_guard<std::mutex> lock(mu_);
   RaftRequestVoteResponse resp;
   resp.term = hs_.current_term;
 
+  // Reject if candidate's term is stale
   if (req.term < hs_.current_term) {
     resp.vote_granted = false;
     return resp;
   }
 
+  // Step down if candidate has higher term
   if (req.term > hs_.current_term) {
     BecomeFollower(req.term);
   }
 
+  // Check if candidate's log is at least as up-to-date as ours
   bool up_to_date = (req.last_log_term > LastLogTerm()) ||
                     (req.last_log_term == LastLogTerm() && req.last_log_index >= LastLogIndex());
 
+  // Grant vote if we haven't voted yet (or already voted for this candidate) and log is up-to-date
   if ((hs_.voted_for == -1 || hs_.voted_for == req.candidate_id) && up_to_date) {
     hs_.voted_for = req.candidate_id;
     if (wal_) {
@@ -162,6 +171,7 @@ bool RaftNode::Propose(const std::string& command) {
   return Propose(command, nullptr);
 }
 
+// Propose a new command to the Raft log (leader only)
 bool RaftNode::Propose(const std::string& command, uint64_t* out_index) {
   std::lock_guard<std::mutex> lock(mu_);
   if (role_ != Role::Leader) return false;

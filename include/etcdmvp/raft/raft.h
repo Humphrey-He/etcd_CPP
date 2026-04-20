@@ -9,18 +9,21 @@
 
 namespace etcdmvp {
 
+// Raft log entry containing index, term, and command data
 struct LogEntry {
   uint64_t index = 0;
   uint64_t term = 0;
   std::string command;
 };
 
+// Persistent Raft state (must survive crashes)
 struct HardState {
   uint64_t current_term = 0;
   int64_t voted_for = -1;
   uint64_t commit_index = 0;
 };
 
+// AppendEntries RPC request (heartbeat or log replication)
 struct RaftAppendEntriesRequest {
   uint64_t term = 0;
   int64_t leader_id = -1;
@@ -30,12 +33,14 @@ struct RaftAppendEntriesRequest {
   uint64_t leader_commit = 0;
 };
 
+// AppendEntries RPC response
 struct RaftAppendEntriesResponse {
   uint64_t term = 0;
   bool success = false;
   uint64_t match_index = 0;
 };
 
+// RequestVote RPC request (election)
 struct RaftRequestVoteRequest {
   uint64_t term = 0;
   int64_t candidate_id = -1;
@@ -43,11 +48,14 @@ struct RaftRequestVoteRequest {
   uint64_t last_log_term = 0;
 };
 
+// RequestVote RPC response
 struct RaftRequestVoteResponse {
   uint64_t term = 0;
   bool vote_granted = false;
 };
 
+// Transport interface for sending Raft RPCs to peers
+// Transport interface for sending Raft RPCs to peers
 class ITransport {
 public:
   virtual ~ITransport() = default;
@@ -55,12 +63,14 @@ public:
   virtual RaftRequestVoteResponse SendRequestVote(int64_t target_id, const RaftRequestVoteRequest& req) = 0;
 };
 
+// State machine interface for applying committed log entries
 class IStateMachine {
 public:
   virtual ~IStateMachine() = default;
   virtual void Apply(const LogEntry& entry) = 0;
 };
 
+// Write-ahead log interface for persisting Raft state
 class IWal {
 public:
   virtual ~IWal() = default;
@@ -69,6 +79,7 @@ public:
   virtual bool Load(std::vector<LogEntry>& out_log, HardState& out_hs) = 0;
 };
 
+// Raft consensus node implementing leader election and log replication
 class RaftNode {
 public:
   enum class Role { Follower, Candidate, Leader };
