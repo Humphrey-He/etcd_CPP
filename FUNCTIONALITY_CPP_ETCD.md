@@ -103,7 +103,6 @@ apply_index:uint64 | last_term:uint64 | kv_count:uint64 | (klen,vlen,key,val)* |
 
 ## 6. 已知限制与待修复
 
-- ErrorCode 枚举中缺少 `NOT_FOUND`，但代码在 LeaseKeepAlive 里会返回该码（需要补充枚举）。
 - Txn compare 目前未做更严格的线性化读索引校验（MVP 简化为 leader 本地读）。
 - Watch 历史基于内存队列，持久化在快照时刷新，崩溃后可能丢失快照后到崩溃前的历史。
 - 未实现 TLS、认证、动态成员变更、读性能优化与压缩。

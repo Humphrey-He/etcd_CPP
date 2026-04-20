@@ -36,6 +36,7 @@ enum ErrorCode {
   NOT_LEADER = 1;
   HISTORY_UNAVAILABLE = 2;
   INTERNAL = 3;
+  NOT_FOUND = 4;
 }
 
 message ResponseHeader {
