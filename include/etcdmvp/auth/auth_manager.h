@@ -51,7 +51,9 @@ public:
   bool ChangePassword(const std::string& username, const std::string& password);
   bool UserExists(const std::string& username) const;
 
+  // Authenticate user and return token (empty string on failure)
   std::string Authenticate(const std::string& username, const std::string& password);
+  // Validate token and return username (false if invalid)
   bool ValidateToken(const std::string& token, std::string& username) const;
 
   bool AddRole(const std::string& role);
@@ -59,9 +61,11 @@ public:
   bool GrantPermission(const std::string& role, PermissionType perm,
                        const std::string& key, const std::string& range_end);
 
+  // Check if user has permission to access key (returns true if auth disabled)
   bool CheckPermission(const std::string& username, PermissionType perm,
                        const std::string& key) const;
 
+  // Initialize root user with password from ETCD_MVP_ROOT_PASSWORD env var
   void InitRootUser();
 
 private:
