@@ -22,6 +22,8 @@ service Lease {
 service Cluster {
   rpc MemberList(Empty) returns (MemberListResponse);
   rpc Status(Empty) returns (StatusResponse);
+  rpc MemberAdd(MemberAddRequest) returns (MemberAddResponse);
+  rpc MemberRemove(MemberRemoveRequest) returns (MemberRemoveResponse);
 }
 
 service Auth {
@@ -233,6 +235,23 @@ message StatusResponse {
   ResponseHeader header = 1;
   int64 leader = 2;
   int64 revision = 3;
+}
+
+message MemberAddRequest {
+  repeated string peer_urls = 1;
+}
+
+message MemberAddResponse {
+  ResponseHeader header = 1;
+  Member member = 2;
+}
+
+message MemberRemoveRequest {
+  int64 id = 1;
+}
+
+message MemberRemoveResponse {
+  ResponseHeader header = 1;
 }
 
 message RaftEntry {

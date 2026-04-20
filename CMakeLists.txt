@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(ETCD_MVP_BUILD_TESTS "Build unit tests" ON)
+option(ETCD_MVP_USE_ROCKSDB "Use RocksDB storage backend" OFF)
+
 set(PROTO_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/proto)
 set(PROTO_FILE ${PROTO_SRC_DIR}/etcd_mvp.proto)
 
@@ -28,19 +30,23 @@ add_custom_command(
 
 add_library(etcdmvp
   src/raft.cpp
+  src/raft_core.cpp
   src/raft_grpc_transport.cpp
   src/storage_wal.cpp
   src/storage_snapshot.cpp
   src/storage_config.cpp
+  src/storage_backend.cpp
   src/lease_manager.cpp
   src/kv_engine.cpp
   src/watch_manager.cpp
   src/cluster.cpp
+  src/cluster_config.cpp
   src/node.cpp
   src/grpc_server.cpp
   src/tls_config.cpp
   src/auth_manager.cpp
   src/logger.cpp
+  src/compaction_manager.cpp
   ${PROTO_SRCS}
   ${CMAKE_CURRENT_BINARY_DIR}/etcd_mvp.grpc.pb.cc
 )
@@ -55,6 +61,12 @@ target_link_libraries(etcdmvp PUBLIC
   gRPC::grpc++
   protobuf::libprotobuf
 )
+
+if(ETCD_MVP_USE_ROCKSDB)
+  find_package(RocksDB REQUIRED)
+  target_link_libraries(etcdmvp PUBLIC RocksDB::rocksdb)
+  target_compile_definitions(etcdmvp PUBLIC ETCD_MVP_USE_ROCKSDB)
+endif()
 
 add_executable(etcd_mvp
   src/main.cpp

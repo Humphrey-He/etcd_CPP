@@ -2,6 +2,7 @@
 
 #include "etcdmvp/lease/lease_manager.h"
 #include "etcdmvp/raft/raft.h"
+#include "etcdmvp/compaction/compaction_manager.h"
 
 #include <functional>
 #include <mutex>
@@ -48,6 +49,11 @@ public:
                    uint64_t& version,
                    int64_t& lease) const;
 
+  bool Compact(uint64_t revision);
+  uint64_t CompactRevision() const;
+
+  CompactionManager* GetCompactionManager() { return &compaction_manager_; }
+
 private:
   struct Version {
     uint64_t revision = 0;
@@ -64,6 +70,8 @@ private:
   mutable std::mutex mu_;
   std::unordered_map<std::string, std::vector<Version>> history_;
   uint64_t revision_ = 0;
+  uint64_t compact_revision_ = 0;
+  CompactionManager compaction_manager_;
 };
 
 } // namespace etcdmvp

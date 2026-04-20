@@ -230,4 +230,31 @@ void KvEngine::EmitEvent(const KvEvent& ev) {
   if (watch_manager_) watch_manager_->OnEvent(ev);
 }
 
+bool KvEngine::Compact(uint64_t revision) {
+  std::lock_guard<std::mutex> lock(mu_);
+
+  if (revision <= compact_revision_) return false;
+  if (revision > revision_) return false;
+
+  for (auto& kv : history_) {
+    auto& versions = kv.second;
+    auto it = versions.begin();
+    while (it != versions.end()) {
+      if (it->revision < revision) {
+        it = versions.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  compact_revision_ = revision;
+  return true;
+}
+
+uint64_t KvEngine::CompactRevision() const {
+  std::lock_guard<std::mutex> lock(mu_);
+  return compact_revision_;
+}
+
 } // namespace etcdmvp
