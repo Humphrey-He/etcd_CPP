@@ -1,0 +1,1299 @@
+{
+  "version": "1.0",
+  "package": "etcdmvp",
+  "services": [
+    {
+      "name": "KV",
+      "rpcs": [
+        {
+          "name": "Put",
+          "request": "PutRequest",
+          "response": "PutResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.KV/Put"
+        },
+        {
+          "name": "Get",
+          "request": "GetRequest",
+          "response": "GetResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.KV/Get"
+        },
+        {
+          "name": "Delete",
+          "request": "DeleteRequest",
+          "response": "DeleteResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.KV/Delete"
+        },
+        {
+          "name": "Txn",
+          "request": "TxnRequest",
+          "response": "TxnResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.KV/Txn"
+        }
+      ]
+    },
+    {
+      "name": "Watch",
+      "rpcs": [
+        {
+          "name": "Watch",
+          "request": "WatchRequest",
+          "response": "WatchResponse",
+          "streaming": true,
+          "endpoint": "/etcdmvp.Watch/Watch"
+        }
+      ]
+    },
+    {
+      "name": "Lease",
+      "rpcs": [
+        {
+          "name": "LeaseGrant",
+          "request": "LeaseGrantRequest",
+          "response": "LeaseGrantResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Lease/LeaseGrant"
+        },
+        {
+          "name": "LeaseRevoke",
+          "request": "LeaseRevokeRequest",
+          "response": "LeaseRevokeResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Lease/LeaseRevoke"
+        },
+        {
+          "name": "LeaseKeepAlive",
+          "request": "LeaseKeepAliveRequest",
+          "response": "LeaseKeepAliveResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Lease/LeaseKeepAlive"
+        }
+      ]
+    },
+    {
+      "name": "Cluster",
+      "rpcs": [
+        {
+          "name": "MemberList",
+          "request": "Empty",
+          "response": "MemberListResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Cluster/MemberList"
+        },
+        {
+          "name": "Status",
+          "request": "Empty",
+          "response": "StatusResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Cluster/Status"
+        },
+        {
+          "name": "MemberAdd",
+          "request": "MemberAddRequest",
+          "response": "MemberAddResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Cluster/MemberAdd"
+        },
+        {
+          "name": "MemberRemove",
+          "request": "MemberRemoveRequest",
+          "response": "MemberRemoveResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Cluster/MemberRemove"
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "rpcs": [
+        {
+          "name": "Authenticate",
+          "request": "AuthenticateRequest",
+          "response": "AuthenticateResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/Authenticate"
+        },
+        {
+          "name": "UserAdd",
+          "request": "UserAddRequest",
+          "response": "UserAddResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/UserAdd"
+        },
+        {
+          "name": "UserDelete",
+          "request": "UserDeleteRequest",
+          "response": "UserDeleteResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/UserDelete"
+        },
+        {
+          "name": "UserChangePassword",
+          "request": "UserChangePasswordRequest",
+          "response": "UserChangePasswordResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/UserChangePassword"
+        },
+        {
+          "name": "UserGrantRole",
+          "request": "UserGrantRoleRequest",
+          "response": "UserGrantRoleResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/UserGrantRole"
+        },
+        {
+          "name": "RoleAdd",
+          "request": "RoleAddRequest",
+          "response": "RoleAddResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/RoleAdd"
+        },
+        {
+          "name": "RoleGrantPermission",
+          "request": "RoleGrantPermissionRequest",
+          "response": "RoleGrantPermissionResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Auth/RoleGrantPermission"
+        }
+      ]
+    },
+    {
+      "name": "Raft",
+      "rpcs": [
+        {
+          "name": "AppendEntries",
+          "request": "AppendEntriesRequest",
+          "response": "AppendEntriesResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Raft/AppendEntries"
+        },
+        {
+          "name": "RequestVote",
+          "request": "RequestVoteRequest",
+          "response": "RequestVoteResponse",
+          "streaming": false,
+          "endpoint": "/etcdmvp.Raft/RequestVote"
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "ResponseHeader",
+      "fields": [
+        {
+          "name": "code",
+          "type": "ErrorCode",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "leader_address",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "message",
+          "type": "string",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "number": 4,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "KeyValue",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "value",
+          "type": "bytes",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "create_revision",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "mod_revision",
+          "type": "int64",
+          "number": 4,
+          "repeated": false
+        },
+        {
+          "name": "version",
+          "type": "int64",
+          "number": 5,
+          "repeated": false
+        },
+        {
+          "name": "lease",
+          "type": "int64",
+          "number": 6,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "PutRequest",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "value",
+          "type": "bytes",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "lease",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "number": 4,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "PutResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "GetRequest",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "GetResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "kvs",
+          "type": "KeyValue",
+          "number": 3,
+          "repeated": true
+        }
+      ]
+    },
+    {
+      "name": "DeleteRequest",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "DeleteResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "deleted",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "Compare",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "result",
+          "type": "CompareResult",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "target",
+          "type": "CompareTarget",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "value",
+          "type": "bytes",
+          "number": 4,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 5,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RequestOp",
+      "fields": [
+        {
+          "name": "put_request",
+          "type": "PutRequest",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "get_request",
+          "type": "GetRequest",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "delete_request",
+          "type": "DeleteRequest",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "ResponseOp",
+      "fields": [
+        {
+          "name": "put_response",
+          "type": "PutResponse",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "get_response",
+          "type": "GetResponse",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "delete_response",
+          "type": "DeleteResponse",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "TxnRequest",
+      "fields": [
+        {
+          "name": "compare",
+          "type": "Compare",
+          "number": 1,
+          "repeated": true
+        },
+        {
+          "name": "success",
+          "type": "RequestOp",
+          "number": 2,
+          "repeated": true
+        },
+        {
+          "name": "failure",
+          "type": "RequestOp",
+          "number": 3,
+          "repeated": true
+        },
+        {
+          "name": "request_id",
+          "type": "string",
+          "number": 4,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "TxnResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "succeeded",
+          "type": "bool",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "responses",
+          "type": "ResponseOp",
+          "number": 3,
+          "repeated": true
+        }
+      ]
+    },
+    {
+      "name": "WatchRequest",
+      "fields": [
+        {
+          "name": "create_request",
+          "type": "WatchCreateRequest",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "cancel_request",
+          "type": "WatchCancelRequest",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "WatchCreateRequest",
+      "fields": [
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "prefix",
+          "type": "bool",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "start_revision",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "WatchCancelRequest",
+      "fields": [
+        {
+          "name": "watch_id",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "Event",
+      "fields": []
+    },
+    {
+      "name": "WatchResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "watch_id",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "events",
+          "type": "Event",
+          "number": 4,
+          "repeated": true
+        },
+        {
+          "name": "canceled",
+          "type": "bool",
+          "number": 5,
+          "repeated": false
+        },
+        {
+          "name": "compact_revision",
+          "type": "int64",
+          "number": 6,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseGrantRequest",
+      "fields": [
+        {
+          "name": "ttl",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseGrantResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "ttl",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseRevokeRequest",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseRevokeResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseKeepAliveRequest",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "LeaseKeepAliveResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "ttl",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "Member",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "peer_urls",
+          "type": "string",
+          "number": 3,
+          "repeated": true
+        }
+      ]
+    },
+    {
+      "name": "MemberListResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "members",
+          "type": "Member",
+          "number": 2,
+          "repeated": true
+        }
+      ]
+    },
+    {
+      "name": "StatusResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "leader",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "revision",
+          "type": "int64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "MemberAddRequest",
+      "fields": [
+        {
+          "name": "peer_urls",
+          "type": "string",
+          "number": 1,
+          "repeated": true
+        }
+      ]
+    },
+    {
+      "name": "MemberAddResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "member",
+          "type": "Member",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "MemberRemoveRequest",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int64",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "MemberRemoveResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RaftEntry",
+      "fields": [
+        {
+          "name": "term",
+          "type": "uint64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "index",
+          "type": "uint64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "data",
+          "type": "bytes",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "AppendEntriesRequest",
+      "fields": [
+        {
+          "name": "term",
+          "type": "uint64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "leader_id",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "prev_log_index",
+          "type": "uint64",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "prev_log_term",
+          "type": "uint64",
+          "number": 4,
+          "repeated": false
+        },
+        {
+          "name": "entries",
+          "type": "RaftEntry",
+          "number": 5,
+          "repeated": true
+        },
+        {
+          "name": "leader_commit",
+          "type": "uint64",
+          "number": 6,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "AppendEntriesResponse",
+      "fields": [
+        {
+          "name": "term",
+          "type": "uint64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "success",
+          "type": "bool",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "match_index",
+          "type": "uint64",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RequestVoteRequest",
+      "fields": [
+        {
+          "name": "term",
+          "type": "uint64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "candidate_id",
+          "type": "int64",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "last_log_index",
+          "type": "uint64",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "last_log_term",
+          "type": "uint64",
+          "number": 4,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RequestVoteResponse",
+      "fields": [
+        {
+          "name": "term",
+          "type": "uint64",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "vote_granted",
+          "type": "bool",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "AuthenticateRequest",
+      "fields": [
+        {
+          "name": "username",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "password",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "AuthenticateResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserAddRequest",
+      "fields": [
+        {
+          "name": "username",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "password",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserAddResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserDeleteRequest",
+      "fields": [
+        {
+          "name": "username",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserDeleteResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserChangePasswordRequest",
+      "fields": [
+        {
+          "name": "username",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "password",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserChangePasswordResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserGrantRoleRequest",
+      "fields": [
+        {
+          "name": "username",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 3,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "UserGrantRoleResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RoleAddRequest",
+      "fields": [
+        {
+          "name": "name",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 2,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RoleAddResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RoleGrantPermissionRequest",
+      "fields": [
+        {
+          "name": "role",
+          "type": "string",
+          "number": 1,
+          "repeated": false
+        },
+        {
+          "name": "permission",
+          "type": "Permission",
+          "number": 2,
+          "repeated": false
+        },
+        {
+          "name": "key",
+          "type": "bytes",
+          "number": 3,
+          "repeated": false
+        },
+        {
+          "name": "range_end",
+          "type": "bytes",
+          "number": 4,
+          "repeated": false
+        },
+        {
+          "name": "token",
+          "type": "string",
+          "number": 5,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "name": "RoleGrantPermissionResponse",
+      "fields": [
+        {
+          "name": "header",
+          "type": "ResponseHeader",
+          "number": 1,
+          "repeated": false
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "ErrorCode",
+      "values": [
+        {
+          "name": "OK",
+          "number": 0
+        },
+        {
+          "name": "NOT_LEADER",
+          "number": 1
+        },
+        {
+          "name": "HISTORY_UNAVAILABLE",
+          "number": 2
+        },
+        {
+          "name": "INTERNAL",
+          "number": 3
+        },
+        {
+          "name": "NOT_FOUND",
+          "number": 4
+        },
+        {
+          "name": "TIMEOUT",
+          "number": 5
+        },
+        {
+          "name": "UNAVAILABLE",
+          "number": 6
+        },
+        {
+          "name": "INVALID_ARGUMENT",
+          "number": 7
+        },
+        {
+          "name": "RESOURCE_EXHAUSTED",
+          "number": 8
+        },
+        {
+          "name": "UNAUTHENTICATED",
+          "number": 9
+        },
+        {
+          "name": "PERMISSION_DENIED",
+          "number": 10
+        }
+      ]
+    },
+    {
+      "name": "CompareResult",
+      "values": [
+        {
+          "name": "EQUAL",
+          "number": 0
+        },
+        {
+          "name": "GREATER",
+          "number": 1
+        },
+        {
+          "name": "LESS",
+          "number": 2
+        },
+        {
+          "name": "NOT_EQUAL",
+          "number": 3
+        }
+      ]
+    },
+    {
+      "name": "CompareTarget",
+      "values": [
+        {
+          "name": "VALUE",
+          "number": 0
+        },
+        {
+          "name": "MOD",
+          "number": 1
+        }
+      ]
+    },
+    {
+      "name": "EventType",
+      "values": [
+        {
+          "name": "PUT",
+          "number": 0
+        },
+        {
+          "name": "DELETE",
+          "number": 1
+        }
+      ]
+    },
+    {
+      "name": "Permission",
+      "values": [
+        {
+          "name": "READ",
+          "number": 0
+        },
+        {
+          "name": "WRITE",
+          "number": 1
+        },
+        {
+          "name": "READWRITE",
+          "number": 2
+        }
+      ]
+    }
+  ]
+}
