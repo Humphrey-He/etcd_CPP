@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "etcdmvp/raft/raft.h"
+#include "etcd_mvp.grpc.pb.h"
 
 #include <grpcpp/grpcpp.h>
 
